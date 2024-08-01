@@ -1,3 +1,4 @@
+import sys
 from typing import Any, Optional
 import xmlrpc.client
 from dataclasses import dataclass
@@ -9,10 +10,25 @@ from html.parser import HTMLParser
 import logging
 import html
 import requests
+import argparse
+import os
+from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
 USER_AGENT = "Shadowmire (https://github.com/taoky/shadowmire)"
+
+
+@contextmanager
+def overwrite(file_path: Path, mode: str = "w", tmp_suffix: str = ".tmp"):
+    tmp_path = file_path.parent / (file_path.name + tmp_suffix)
+    try:
+        with open(tmp_path, mode) as tmp_file:
+            yield tmp_file
+        tmp_path.rename(file_path)
+    except Exception:
+        # well, just keep the tmp_path in error case.
+        raise
 
 
 def normalize(name: str) -> str:
@@ -77,6 +93,10 @@ def create_requests_session() -> requests.Session:
     return s
 
 
+class PackageNotFoundError(Exception):
+    pass
+
+
 class PyPI:
     """
     Upstream which implements full PyPI APIs
@@ -96,7 +116,10 @@ class PyPI:
         return self.xmlrpc_client.list_packages_with_serial()  # type: ignore
 
     def get_package_metadata(self, package_name: str) -> dict:
-        return self.session.get(urljoin(self.host, f"pypi/{package_name}/json")).json()
+        req = self.session.get(urljoin(self.host, f"pypi/{package_name}/json"))
+        if req.status_code == 404:
+            raise PackageNotFoundError
+        return req.json()
 
     def get_release_files_from_meta(self, package_meta: dict) -> list[dict]:
         release_files = []
@@ -162,7 +185,7 @@ class PyPI:
         )
 
         simple_page_content += (
-            f"\n  </body>\n</html>\n<!--SERIAL {package_meta["last_serial"]}-->"
+            f"\n  </body>\n</html>\n<!--SERIAL {package_meta['last_serial']}-->"
         )
 
         return simple_page_content
@@ -201,14 +224,8 @@ class PyPI:
         return json.dumps(package_json)
 
 
-@dataclass
-class ShadowmirePackageValue:
-    serial: int
-    raw_name: str
-
-
 # (normalized_name as key, value)
-ShadowmirePackageItem = tuple[str, ShadowmirePackageValue]
+ShadowmirePackageItem = tuple[str, int]
 
 
 @dataclass
@@ -226,13 +243,13 @@ class SyncBase:
         self.simple_dir.mkdir(parents=True, exist_ok=True)
         self.packages_dir.mkdir(parents=True, exist_ok=True)
         self.sync_packages = sync_packages
-        self.remote: Optional[dict[str, ShadowmirePackageValue]] = None
+        self.remote: Optional[dict[str, int]] = None
 
-    def determine_sync_plan(self, local: dict[str, ShadowmirePackageValue]) -> Plan:
+    def determine_sync_plan(self, local: dict[str, int]) -> Plan:
         remote = self.fetch_remote_versions()
         self.remote = remote
         # store remote to remote.json
-        with open(self.basedir / "remote.json", "w") as f:
+        with overwrite(self.basedir / "remote.json") as f:
             json.dump(remote, f)
         to_remove = []
         to_update = []
@@ -250,7 +267,7 @@ class SyncBase:
         output = Plan(remove=to_remove, update=to_update)
         return output
 
-    def fetch_remote_versions(self) -> dict[str, ShadowmirePackageValue]:
+    def fetch_remote_versions(self) -> dict[str, int]:
         raise NotImplementedError
 
     def do_sync_plan(self, plan: Plan) -> None:
@@ -277,9 +294,10 @@ class SyncBase:
             # remove all files inside meta_dir
             remove_dir_with_files(meta_dir)
         for package in to_update:
+            logger.info("Updating %s", package)
             self.do_update((package, self.remote[package]))
 
-    def do_update(self, package: ShadowmirePackageItem) -> None:
+    def do_update(self, package: ShadowmirePackageItem) -> bool:
         raise NotImplementedError
 
     def finalize(self) -> None:
@@ -287,7 +305,7 @@ class SyncBase:
         # generate index.html at basedir
         index_path = self.basedir / "simple" / "index.html"
         # modified from bandersnatch
-        with open(index_path, "w") as f:
+        with overwrite(index_path) as f:
             f.write("<!DOCTYPE html>\n")
             f.write("<html>\n")
             f.write("  <head>\n")
@@ -312,41 +330,45 @@ class SyncPyPI(SyncBase):
         self.session = create_requests_session()
         super().__init__(basedir, sync_packages)
 
-    def fetch_remote_versions(self) -> dict[str, ShadowmirePackageValue]:
+    def fetch_remote_versions(self) -> dict[str, int]:
         remote_serials = self.pypi.list_packages_with_serial()
         ret = {}
         for key in remote_serials:
-            ret[normalize(key)] = ShadowmirePackageValue(
-                serial=remote_serials[key], raw_name=key
-            )
+            ret[normalize(key)] = remote_serials[key]
         return ret
 
-    def do_update(self, package: ShadowmirePackageItem) -> None:
+    def do_update(self, package: ShadowmirePackageItem) -> bool:
         package_name = package[0]
         # The serial get from metadata now might be newer than package_serial...
-        # package_serial = package[1].serial
-        package_rawname = package[1].raw_name
+        # package_serial = package[1]
 
         package_simple_dir = self.simple_dir / package_name
         package_simple_dir.mkdir(exist_ok=True)
-        meta = self.pypi.get_package_metadata(package_name)
+        try:
+            meta = self.pypi.get_package_metadata(package_name)
+            logger.debug("%s meta: %s", package_name, meta)
+        except PackageNotFoundError:
+            logger.warning("%s missing from upstream, skip.", package_name)
+            return False
 
-        simple_html_contents = self.pypi.generate_html_simple_page(
-            meta, package_rawname
-        )
+        # OK, here we don't bother store raw name
+        # Considering that JSON API even does not give package raw name, why bother we use it?
+        simple_html_contents = self.pypi.generate_html_simple_page(meta, package_name)
         simple_json_contents = self.pypi.generate_json_simple_page(meta)
 
         for html_filename in ("index.html", "index.v1_html"):
             html_path = package_simple_dir / html_filename
-            with open(html_path, "w") as f:
+            with overwrite(html_path) as f:
                 f.write(simple_html_contents)
         for json_filename in ("index.v1_json",):
             json_path = package_simple_dir / json_filename
-            with open(json_path, "w") as f:
+            with overwrite(json_path) as f:
                 f.write(simple_json_contents)
 
         if self.sync_packages:
             raise NotImplementedError
+
+        return True
 
 
 class SyncPlainHTTP(SyncBase):
@@ -357,14 +379,14 @@ class SyncPlainHTTP(SyncBase):
         self.session = create_requests_session()
         super().__init__(basedir, sync_packages)
 
-    def fetch_remote_versions(self) -> dict[str, ShadowmirePackageValue]:
+    def fetch_remote_versions(self) -> dict[str, int]:
         remote_url = urljoin(self.upstream, "local.json")
         resp = self.session.get(remote_url)
         resp.raise_for_status()
-        remote: dict[str, ShadowmirePackageValue] = resp.json()
+        remote: dict[str, int] = resp.json()
         return remote
 
-    def do_update(self, package: tuple[str, ShadowmirePackageValue]) -> None:
+    def do_update(self, package: tuple[str, int]) -> bool:
         package_name = package[0]
         package_simple_dir = self.simple_dir / package_name
         package_simple_dir.mkdir(exist_ok=True)
@@ -389,10 +411,47 @@ class SyncPlainHTTP(SyncBase):
         if self.sync_packages:
             raise NotImplementedError
 
+        return True
 
-def main() -> None:
-    logging.basicConfig(level=logging.INFO)
+
+def load_local(basedir: Path) -> dict[str, int]:
+    try:
+        with open(basedir / "local.json") as f:
+            r = json.load(f)
+        return r
+    except FileNotFoundError:
+        return {}
+
+
+def main(args: argparse.Namespace) -> None:
+    log_level = logging.DEBUG if os.environ.get("DEBUG") else logging.INFO
+    logging.basicConfig(level=log_level)
+    basedir = Path(".")
+
+    if args.command == "sync":
+        sync = SyncPyPI(basedir=basedir)
+        local = load_local(basedir)
+        plan = sync.determine_sync_plan(local)
+        # save plan for debugging
+        with overwrite(basedir / "plan.json") as f:
+            json.dump(plan, f, default=vars)
+        sync.do_sync_plan(plan)
+        sync.finalize()
+    elif args.command == "genlocal":
+        pass
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser("shadowmire: lightweight PyPI syncing tool")
+    subparsers = parser.add_subparsers(dest="command")
+
+    parser_sync = subparsers.add_parser("sync", help="Sync from upstream")
+    parser_genlocal = subparsers.add_parser(
+        "genlocal", help="(Re)generate local.json file"
+    )
+
+    args = parser.parse_args()
+    if args.command is None:
+        parser.print_help()
+        sys.exit(1)
+    main(args)

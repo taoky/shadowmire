@@ -4,3 +4,4 @@ local.json
 plan.json
 remote.json
 venv/
+packages/
