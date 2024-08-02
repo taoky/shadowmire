@@ -1,6 +1,8 @@
 requests==2.32.3
+tqdm==4.66.4
 
 # dev
 black==24.4.2
 mypy==1.11.0
 types-requests~=2.32.0
+types-tqdm~=4.66.0
