@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import signal
 import requests
 from tqdm import tqdm
+from requests.adapters import HTTPAdapter, Retry
 
 logger = logging.getLogger(__name__)
 
@@ -192,6 +193,9 @@ class CustomXMLRPCTransport(xmlrpc.client.Transport):
 
 def create_requests_session() -> requests.Session:
     s = requests.Session()
+    retries = Retry(total=3, backoff_factor=0.1)
+    s.mount('http://', HTTPAdapter(max_retries=retries))
+    s.mount('https://', HTTPAdapter(max_retries=retries))
     s.headers.update({"User-Agent": USER_AGENT})
     return s
 
