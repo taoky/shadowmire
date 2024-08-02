@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 import sys
 from typing import Any, Optional
 import xmlrpc.client
@@ -752,4 +753,6 @@ if __name__ == "__main__":
         sys.exit(1)
     if args.command == "sync" and args.exclude:
         args.excludes = [re.compile(i) for i in args.exclude]
+    else:
+        args.excludes = []
     main(args)
