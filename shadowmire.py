@@ -163,6 +163,17 @@ def get_packages_from_index_html(contents: str) -> list[str]:
     return ret
 
 
+def get_existing_hrefs(package_simple_path: Path) -> list[str]:
+    existing_hrefs = []
+    try:
+        with open(package_simple_path / "index.html") as f:
+            contents = f.read()
+        existing_hrefs = get_packages_from_index_html(contents)
+    except FileNotFoundError:
+        pass
+    return existing_hrefs
+
+
 class CustomXMLRPCTransport(xmlrpc.client.Transport):
     """
     Set user-agent for xmlrpc.client
@@ -208,7 +219,7 @@ class PyPI:
         release_files.sort(key=lambda x: x["filename"])
         return release_files
 
-    def _file_url_to_local_url(self, url: str) -> str:
+    def file_url_to_local_url(self, url: str) -> str:
         parsed = urlparse(url)
         assert parsed.path.startswith("/packages")
         prefix = "../.."
@@ -253,7 +264,7 @@ class PyPI:
         simple_page_content += "\n".join(
             [
                 '    <a href="{}#{}={}"{}>{}</a><br/>'.format(
-                    self._file_url_to_local_url(r["url"]),
+                    self.file_url_to_local_url(r["url"]),
                     self.digest_name,
                     r["digests"][self.digest_name],
                     gen_html_file_tags(r),
@@ -295,7 +306,7 @@ class PyPI:
                     "requires-python": r.get("requires_python", ""),
                     "size": r["size"],
                     "upload-time": r.get("upload_time_iso_8601", ""),
-                    "url": self._file_url_to_local_url(r["url"]),
+                    "url": self.file_url_to_local_url(r["url"]),
                     "yanked": r.get("yanked", False),
                 }
             )
@@ -438,6 +449,16 @@ class SyncBase:
             f.write("  </body>\n</html>")
 
 
+def download(session: requests.Session, url: str, dest: Path) -> bool:
+    resp = session.get(url, allow_redirects=True)
+    if resp.status_code >= 400:
+        logger.warning("download %s failed, skipping this package", url)
+        return False
+    with overwrite(dest, "wb") as f:
+        f.write(resp.content)
+    return True
+
+
 class SyncPyPI(SyncBase):
     def __init__(
         self, basedir: Path, local_db: LocalVersionKV, sync_packages: bool = False
@@ -463,19 +484,15 @@ class SyncPyPI(SyncBase):
         except PackageNotFoundError:
             logger.warning("%s missing from upstream, skip.", package_name)
             return None
-        
+
         if self.sync_packages:
             # sync packages first, then sync index
-            existing_hrefs = []
-            try:
-                with open(package_simple_path / "index.html") as f:
-                    contents = f.read()
-                existing_hrefs = get_packages_from_index_html(contents)
-            except FileNotFoundError:
-                pass
+            existing_hrefs = get_existing_hrefs(package_simple_path)
             release_files = self.pypi.get_release_files_from_meta(meta)
             # remove packages that no longer exist remotely
-            remote_hrefs = [self.pypi._file_url_to_local_url(i["url"]) for i in release_files]
+            remote_hrefs = [
+                self.pypi.file_url_to_local_url(i["url"]) for i in release_files
+            ]
             should_remove = list(set(existing_hrefs) - set(remote_hrefs))
             for p in should_remove:
                 logger.info("removing file %s (if exists)", p)
@@ -483,17 +500,14 @@ class SyncPyPI(SyncBase):
                 package_path.unlink(missing_ok=True)
             for i in release_files:
                 url = i["url"]
-                dest = (package_simple_path / self.pypi._file_url_to_local_url(i["url"])).resolve()
+                dest = (
+                    package_simple_path / self.pypi.file_url_to_local_url(i["url"])
+                ).resolve()
                 logger.info("downloading file %s -> %s", url, dest)
                 if dest.exists():
                     continue
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                resp = self.session.get(url)
-                if resp.status_code >= 400:
-                    logger.warning("download %s failed, skipping this package", url)
-                    return None
-                with overwrite(dest, "wb") as f:
-                    f.write(resp.content)
+                download(self.session, url, dest)
 
         last_serial: int = meta["last_serial"]
         simple_html_contents = self.pypi.generate_html_simple_page(meta)
@@ -537,25 +551,38 @@ class SyncPlainHTTP(SyncBase):
         logger.info("updating %s", package_name)
         package_simple_path = self.simple_dir / package_name
         package_simple_path.mkdir(exist_ok=True)
+        if self.sync_packages:
+            existing_hrefs = get_existing_hrefs(package_simple_path)
         # directly fetch remote files
         for filename in ("index.html", "index.v1_html", "index.v1_json"):
             file_url = urljoin(self.upstream, f"/simple/{package_name}/{filename}")
-            resp = self.session.get(file_url)
-            if resp.status_code == 404:
+            success = download(self.session, file_url, package_simple_path / filename)
+            if not success:
                 if filename != "index.html":
                     logger.warning("%s does not exist", file_url)
                     continue
                 else:
                     logger.error("%s does not exist. Stop with this.", file_url)
                     return None
-            else:
-                resp.raise_for_status()
-            content = resp.content
-            with open(package_simple_path / filename, "wb") as f:
-                f.write(content)
 
         if self.sync_packages:
-            raise NotImplementedError
+            current_hrefs = get_existing_hrefs(package_simple_path)
+            should_remove = list(set(existing_hrefs) - set(current_hrefs))
+            for p in should_remove:
+                logger.info("removing file %s (if exists)", p)
+                package_path = (package_simple_path / p).resolve()
+                package_path.unlink(missing_ok=True)
+            package_simple_url = urljoin(self.upstream, f"/simple/{package_name}/")
+            for href in current_hrefs:
+                url = urljoin(package_simple_url, href)
+                dest = (
+                    package_simple_path / href
+                ).resolve()
+                logger.info("downloading file %s -> %s", url, dest)
+                if dest.exists():
+                    continue
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                download(self.session, url, dest)
 
         last_serial = get_local_serial(package_simple_path)
         if not last_serial:
@@ -592,7 +619,9 @@ def main(args: argparse.Namespace) -> None:
     local_db = LocalVersionKV(basedir / "local.db", basedir / "local.json")
 
     if args.command == "sync":
-        sync = SyncPyPI(basedir=basedir, local_db=local_db, sync_packages=args.sync_packages)
+        sync = SyncPyPI(
+            basedir=basedir, local_db=local_db, sync_packages=args.sync_packages
+        )
         local = local_db.dump()
         plan = sync.determine_sync_plan(local)
         # save plan for debugging
@@ -611,7 +640,9 @@ def main(args: argparse.Namespace) -> None:
         local_db.batch_set(local)
         local_db.dump_json()
     elif args.command == "verify":
-        sync = SyncPyPI(basedir=basedir, local_db=local_db)
+        sync = SyncPyPI(
+            basedir=basedir, local_db=local_db, sync_packages=args.sync_packages
+        )
         local_names = set(local_db.keys())
         simple_dirs = set([i.name for i in (basedir / "simple").iterdir()])
         for package_name in simple_dirs - local_names:
@@ -625,13 +656,22 @@ if __name__ == "__main__":
     subparsers = parser.add_subparsers(dest="command")
 
     parser_sync = subparsers.add_parser("sync", help="Sync from upstream")
-    parser_sync.add_argument("--sync-packages", help="Sync packages instead of just indexes", action='store_true')
+    parser_sync.add_argument(
+        "--sync-packages",
+        help="Sync packages instead of just indexes",
+        action="store_true",
+    )
     parser_genlocal = subparsers.add_parser(
         "genlocal", help="(Re)generate local db and json from simple/"
     )
     parser_verify = subparsers.add_parser(
         "verify",
         help="Verify existing sync from local db, download missing things, remove unreferenced packages",
+    )
+    parser_verify.add_argument(
+        "--sync-packages",
+        help="Sync packages instead of just indexes",
+        action="store_true",
     )
 
     args = parser.parse_args()
