@@ -654,6 +654,19 @@ def main(args: argparse.Namespace) -> None:
             sync.do_remove(package_name)
         sync.parallel_update(list(local_names))
         sync.finalize()
+        # clean up unreferenced package files
+        ref_set = set()
+        for sname in simple_dirs:
+            sd = basedir / sname
+            index_html = sd / "index.html"
+            hrefs = get_existing_hrefs(index_html)
+            for i in hrefs:
+                ref_set.add(str((sd / i).resolve()))
+        for file in (basedir / "packages").glob("*/*/*/*"):
+            file = file.resolve()
+            if file not in ref_set:
+                logger.info("removing unreferenced %s", file)
+                file.unlink()
 
 
 if __name__ == "__main__":
