@@ -41,6 +41,9 @@ If you need to download all packages, add `--sync-packages`.
 ./shadowmire.py sync --sync-packages
 ```
 
+> [!IMPORTANT]
+> If you sync with indexes only first, `--sync-packages` would NOT update packages which have been the latest versions. Use `verify` command for this.
+
 Sync command also supports `--exclude` -- you could give multiple regexes like this:
 
 ```shell
