@@ -1,6 +1,7 @@
 .mypy_cache
 simple/
 local.json
+local.db
 plan.json
 remote.json
 venv/
