@@ -344,8 +344,10 @@ class SyncBase:
         self.simple_dir.mkdir(parents=True, exist_ok=True)
         self.packages_dir.mkdir(parents=True, exist_ok=True)
         self.sync_packages = sync_packages
-    
-    def filter_remote_with_excludes(self, remote: dict[str, int], excludes: list[re.Pattern]) -> dict[str, int]:
+
+    def filter_remote_with_excludes(
+        self, remote: dict[str, int], excludes: list[re.Pattern]
+    ) -> dict[str, int]:
         if not excludes:
             return remote
         res = {}
@@ -359,7 +361,9 @@ class SyncBase:
                 res[k] = v
         return res
 
-    def determine_sync_plan(self, local: dict[str, int], excludes: list[re.Pattern]) -> Plan:
+    def determine_sync_plan(
+        self, local: dict[str, int], excludes: list[re.Pattern]
+    ) -> Plan:
         remote = self.fetch_remote_versions()
         remote = self.filter_remote_with_excludes(remote, excludes)
         # store remote to remote.json
@@ -635,13 +639,22 @@ def main(args: argparse.Namespace) -> None:
     logging.basicConfig(level=log_level)
     logger.debug(args)
 
-    basedir = Path(".")
+    basedir = Path(os.environ.get("REPO", "."))
     local_db = LocalVersionKV(basedir / "local.db", basedir / "local.json")
 
+    sync: SyncBase
     if args.command == "sync":
-        sync = SyncPyPI(
-            basedir=basedir, local_db=local_db, sync_packages=args.sync_packages
-        )
+        if args.shadowmire_upstream:
+            sync = SyncPlainHTTP(
+                upstream=args.shadowmire_upstream,
+                basedir=basedir,
+                local_db=local_db,
+                sync_packages=args.sync_packages,
+            )
+        else:
+            sync = SyncPyPI(
+                basedir=basedir, local_db=local_db, sync_packages=args.sync_packages
+            )
         local = local_db.dump()
         plan = sync.determine_sync_plan(local, args.excludes)
         # save plan for debugging
@@ -660,11 +673,21 @@ def main(args: argparse.Namespace) -> None:
         local_db.batch_set(local)
         local_db.dump_json()
     elif args.command == "verify":
-        sync = SyncPyPI(
-            basedir=basedir, local_db=local_db, sync_packages=args.sync_packages
-        )
+        if args.shadowmire_upstream:
+            sync = SyncPlainHTTP(
+                upstream=args.shadowmire_upstream,
+                basedir=basedir,
+                local_db=local_db,
+                sync_packages=args.sync_packages,
+            )
+        else:
+            sync = SyncPyPI(
+                basedir=basedir, local_db=local_db, sync_packages=args.sync_packages
+            )
         local_names = set(local_db.keys())
-        simple_dirs = set([i.name for i in (basedir / "simple").iterdir() if i.is_dir()])
+        simple_dirs = set(
+            [i.name for i in (basedir / "simple").iterdir() if i.is_dir()]
+        )
         for package_name in simple_dirs - local_names:
             sync.do_remove(package_name)
         sync.parallel_update(list(local_names))
@@ -696,6 +719,11 @@ if __name__ == "__main__":
     parser_sync.add_argument(
         "--exclude", help="Remote package names to exclude. Regex.", nargs="*"
     )
+    parser_sync.add_argument(
+        "--shadowmire-upstream",
+        help="Use another upstream using shadowmire instead of PyPI",
+        type=str,
+    )
     parser_genlocal = subparsers.add_parser(
         "genlocal", help="(Re)generate local db and json from simple/"
     )
@@ -707,6 +735,11 @@ if __name__ == "__main__":
         "--sync-packages",
         help="Sync packages instead of just indexes",
         action="store_true",
+    )
+    parser_verify.add_argument(
+        "--shadowmire-upstream",
+        help="Use another upstream using shadowmire instead of PyPI",
+        type=str,
     )
 
     args = parser.parse_args()
