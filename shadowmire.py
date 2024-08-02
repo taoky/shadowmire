@@ -345,29 +345,33 @@ class SyncBase:
         to_update = plan.update
 
         for package_name in to_remove:
-            logger.info("Removing %s", package_name)
-            meta_dir = self.simple_dir / package_name
-            index_html = meta_dir / "index.html"
-            try:
-                with open(index_html) as f:
-                    packages_to_remove = get_packages_from_index_html(f.read())
-                    for p in packages_to_remove:
-                        p_path = meta_dir / p
-                        try:
-                            p_path.unlink()
-                            logger.info("Removed file %s", p_path)
-                        except FileNotFoundError:
-                            pass
-            except FileNotFoundError:
-                pass
-            # remove all files inside meta_dir
-            self.local_db.remove(package_name)
-            remove_dir_with_files(meta_dir)
+            logger.info("removing %s", package_name)
+            self.do_remove(package_name)
+
         for idx, package_name in enumerate(to_update):
-            logger.info("Updating %s", package_name)
+            logger.info("updating %s", package_name)
             self.do_update(package_name)
             if idx % 1000 == 0:
                 self.local_db.dump_json()
+
+    def do_remove(self, package_name: str) -> bool:
+        meta_dir = self.simple_dir / package_name
+        index_html = meta_dir / "index.html"
+        try:
+            with open(index_html) as f:
+                packages_to_remove = get_packages_from_index_html(f.read())
+                for p in packages_to_remove:
+                    p_path = meta_dir / p
+                    try:
+                        p_path.unlink()
+                        logger.info("Removed file %s", p_path)
+                    except FileNotFoundError:
+                        pass
+        except FileNotFoundError:
+            pass
+        # remove all files inside meta_dir
+        self.local_db.remove(package_name)
+        remove_dir_with_files(meta_dir)
 
     def do_update(self, package_name: str) -> bool:
         raise NotImplementedError
@@ -537,12 +541,12 @@ def main(args: argparse.Namespace) -> None:
         local_db.dump_json()
     elif args.command == "verify":
         sync = SyncPyPI(basedir=basedir, local_db=local_db)
-        remote = sync.fetch_remote_versions()
-        for package_name in remote:
-            local_serial = get_local_serial(basedir / "simple" / package_name)
-            if local_serial == remote[package_name]:
-                logger.info("%s serial same as remote", package_name)
-                continue
+        local_names = set(local_db.keys())
+        simple_dirs = set(list((basedir / "simple").iterdir()))
+        for package_name in simple_dirs - local_names:
+            logger.info("removing %s", package_name)
+            sync.do_remove(package_name)
+        for package_name in local_names:
             logger.info("updating %s", package_name)
             sync.do_update(package_name)
         sync.finalize()
@@ -557,7 +561,8 @@ if __name__ == "__main__":
         "genlocal", help="(Re)generate local db and json from simple/"
     )
     parser_verify = subparsers.add_parser(
-        "verify", help="Verify existing sync and download missing things"
+        "verify",
+        help="Verify existing sync from local db, download missing things, remove unreferenced packages",
     )
 
     args = parser.parse_args()
