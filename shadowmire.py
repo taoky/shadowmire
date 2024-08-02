@@ -22,6 +22,12 @@ logger = logging.getLogger(__name__)
 
 USER_AGENT = "Shadowmire (https://github.com/taoky/shadowmire)"
 
+# Note that it's suggested to use only 3 workers for PyPI.
+WORKERS = int(os.environ("SHADOWMIRE_WORKERS", "3"))
+if WORKERS > 10:
+    logger.warning("You have set a worker value larger than 10, which is forbidden by PyPI maintainers.")
+    logger.warning("Don't blame me if you were banned!")
+
 
 class PackageNotFoundError(Exception):
     pass
@@ -337,8 +343,6 @@ class SyncBase:
         self.packages_dir.mkdir(parents=True, exist_ok=True)
         self.sync_packages = sync_packages
         self.remote: Optional[dict[str, int]] = None
-        # Note that it's suggested to use only 3 workers for PyPI.
-        self.workers = 3
 
     def determine_sync_plan(self, local: dict[str, int]) -> Plan:
         remote = self.fetch_remote_versions()
@@ -366,7 +370,7 @@ class SyncBase:
         raise NotImplementedError
 
     def parallel_update(self, package_names: list) -> None:
-        with ThreadPoolExecutor(max_workers=self.workers) as executor:
+        with ThreadPoolExecutor(max_workers=WORKERS) as executor:
             futures = {
                 executor.submit(self.do_update, package_name, False): (
                     idx,
