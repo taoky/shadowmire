@@ -447,6 +447,7 @@ class SyncBase:
                 # We're really trusty that this is all encoded in UTF-8. :/
                 f.write(f'    <a href="{pkg}/">{pkg}</a><br/>\n')
             f.write("  </body>\n</html>")
+        self.local_db.dump_json()
 
 
 def download(session: requests.Session, url: str, dest: Path) -> bool:
