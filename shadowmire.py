@@ -27,11 +27,6 @@ USER_AGENT = "Shadowmire (https://github.com/taoky/shadowmire)"
 
 # Note that it's suggested to use only 3 workers for PyPI.
 WORKERS = int(os.environ.get("SHADOWMIRE_WORKERS", "3"))
-if WORKERS > 10:
-    logger.warning(
-        "You have set a worker value larger than 10, which is forbidden by PyPI maintainers."
-    )
-    logger.warning("Don't blame me if you were banned!")
 
 # https://github.com/pypa/bandersnatch/blob/a05af547f8d1958217ef0dc0028890b1839e6116/src/bandersnatch_filter_plugins/prerelease_name.py#L18C1-L23C6
 PRERELEASE_PATTERNS = (
@@ -442,7 +437,9 @@ class SyncBase:
                     future.cancel()
                 sys.exit(1)
 
-    def do_sync_plan(self, plan: Plan, prerelease_excludes: list[re.Pattern[str]]) -> None:
+    def do_sync_plan(
+        self, plan: Plan, prerelease_excludes: list[re.Pattern[str]]
+    ) -> None:
         to_remove = plan.remove
         to_update = plan.update
 
@@ -716,6 +713,12 @@ def cli(ctx: click.Context) -> None:
     logging.basicConfig(level=log_level)
     ctx.ensure_object(dict)
 
+    if WORKERS > 10:
+        logger.warning(
+            "You have set a worker value larger than 10, which is forbidden by PyPI maintainers."
+        )
+        logger.warning("Don't blame me if you were banned!")
+
     basedir = Path(os.environ.get("REPO", "."))
     local_db = LocalVersionKV(basedir / "local.db", basedir / "local.json")
 
@@ -748,7 +751,7 @@ def get_syncer(
     return syncer
 
 
-@cli.command()
+@cli.command(help="Sync from upstream")
 @click.pass_context
 @sync_shared_args
 def sync(
@@ -772,7 +775,7 @@ def sync(
     syncer.finalize()
 
 
-@cli.command()
+@cli.command(help="(Re)generate local db and json from simple/")
 @click.pass_context
 def genlocal(ctx: click.Context) -> None:
     basedir = ctx.obj["basedir"]
@@ -788,7 +791,9 @@ def genlocal(ctx: click.Context) -> None:
     local_db.dump_json()
 
 
-@cli.command()
+@cli.command(
+    help="Verify existing sync from local db, download missing things, remove unreferenced packages"
+)
 @click.pass_context
 @sync_shared_args
 def verify(
@@ -821,6 +826,48 @@ def verify(
         if str(file) not in ref_set:
             logger.info("removing unreferenced %s", file)
             file.unlink()
+
+
+@cli.command(help="Manual update given package for debugging purpose")
+@click.pass_context
+@sync_shared_args
+@click.argument("package_name")
+def do_update(
+    ctx: click.Context,
+    sync_packages: bool,
+    shadowmire_upstream: Optional[str],
+    exclude: tuple[str],
+    prerelease_exclude: tuple[str],
+    package_name: str,
+) -> None:
+    basedir = ctx.obj["basedir"]
+    local_db = ctx.obj["local_db"]
+    excludes = exclude_to_excludes(exclude)
+    prerelease_excludes = exclude_to_excludes(prerelease_exclude)
+    syncer = get_syncer(basedir, local_db, sync_packages, shadowmire_upstream)
+    syncer.do_update(package_name, prerelease_excludes)
+
+
+@cli.command(help="Manual remove given package for debugging purpose")
+@click.pass_context
+@sync_shared_args
+@click.argument("package_name")
+def do_remove(
+    ctx: click.Context,
+    sync_packages: bool,
+    shadowmire_upstream: Optional[str],
+    exclude: tuple[str],
+    prerelease_exclude: tuple[str],
+    package_name: str,
+) -> None:
+    basedir = ctx.obj["basedir"]
+    local_db = ctx.obj["local_db"]
+    if exclude or prerelease_exclude:
+        logger.warning("exclusion rules are ignored in do_remove()")
+    # excludes = exclude_to_excludes(exclude)
+    # prerelease_excludes = exclude_to_excludes(prerelease_exclude)
+    syncer = get_syncer(basedir, local_db, sync_packages, shadowmire_upstream)
+    syncer.do_remove(package_name)
 
 
 if __name__ == "__main__":
