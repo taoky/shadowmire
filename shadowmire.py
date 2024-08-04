@@ -384,6 +384,9 @@ class SyncBase:
     def determine_sync_plan(
         self, local: dict[str, int], excludes: list[re.Pattern[str]]
     ) -> Plan:
+        """
+        local should NOT skip invalid (-1) serials
+        """
         remote = self.fetch_remote_versions()
         remote = self.filter_remote_with_excludes(remote, excludes)
         # store remote to remote.json
@@ -402,7 +405,10 @@ class SyncBase:
             local_serial = local[i]
             remote_serial = remote[i]
             if local_serial != remote_serial:
-                to_update.append(i)
+                if local_serial == -1:
+                    logger.info("skip %s, as it's marked as not exist at upstream", i)
+                else:
+                    to_update.append(i)
         output = Plan(remove=to_remove, update=to_update)
         return output
 
@@ -770,12 +776,12 @@ def sync(
     exclude: tuple[str],
     prerelease_exclude: tuple[str],
 ) -> None:
-    basedir = ctx.obj["basedir"]
-    local_db = ctx.obj["local_db"]
+    basedir: Path = ctx.obj["basedir"]
+    local_db: LocalVersionKV = ctx.obj["local_db"]
     excludes = exclude_to_excludes(exclude)
     prerelease_excludes = exclude_to_excludes(prerelease_exclude)
     syncer = get_syncer(basedir, local_db, sync_packages, shadowmire_upstream)
-    local = local_db.dump()
+    local = local_db.dump(skip_invalid=False)
     plan = syncer.determine_sync_plan(local, excludes)
     # save plan for debugging
     with overwrite(basedir / "plan.json") as f:
@@ -787,8 +793,8 @@ def sync(
 @cli.command(help="(Re)generate local db and json from simple/")
 @click.pass_context
 def genlocal(ctx: click.Context) -> None:
-    basedir = ctx.obj["basedir"]
-    local_db = ctx.obj["local_db"]
+    basedir: Path = ctx.obj["basedir"]
+    local_db: LocalVersionKV = ctx.obj["local_db"]
     local = {}
     for package_path in (basedir / "simple").iterdir():
         package_name = package_path.name
@@ -812,8 +818,8 @@ def verify(
     exclude: tuple[str],
     prerelease_exclude: tuple[str],
 ) -> None:
-    basedir = ctx.obj["basedir"]
-    local_db = ctx.obj["local_db"]
+    basedir: Path = ctx.obj["basedir"]
+    local_db: LocalVersionKV = ctx.obj["local_db"]
     excludes = exclude_to_excludes(exclude)
     prerelease_excludes = exclude_to_excludes(prerelease_exclude)
     syncer = get_syncer(basedir, local_db, sync_packages, shadowmire_upstream)
@@ -849,8 +855,8 @@ def do_update(
     prerelease_exclude: tuple[str],
     package_name: str,
 ) -> None:
-    basedir = ctx.obj["basedir"]
-    local_db = ctx.obj["local_db"]
+    basedir: Path = ctx.obj["basedir"]
+    local_db: LocalVersionKV = ctx.obj["local_db"]
     excludes = exclude_to_excludes(exclude)
     prerelease_excludes = exclude_to_excludes(prerelease_exclude)
     syncer = get_syncer(basedir, local_db, sync_packages, shadowmire_upstream)
