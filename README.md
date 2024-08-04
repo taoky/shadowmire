@@ -71,8 +71,12 @@ If you already have a pypi repo, use `genlocal` first to generate a local db:
 Verify command could be used if you believe that something is wrong. It would remove packages NOT in local db, update all local packages, and delete unreferenced files in `packages` folder:
 
 ```shell
-./shadowmire.py verify
+./shadowmire.py verify --sync-packages
 ```
+
+Verify command accepts same arguments as sync.
+
+Also, if you need debugging, you could use `do-update` and `do-remove` command to operate on a single package.
 
 ## Acknowledgements
 
