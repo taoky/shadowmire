@@ -99,20 +99,26 @@ class LocalVersionKV:
         if commit:
             self.conn.commit()
 
-    def keys(self) -> list[str]:
+    def keys(self, skip_invalid: bool = True) -> list[str]:
         cur = self.conn.cursor()
-        res = cur.execute("SELECT key FROM local")
+        if skip_invalid:
+            res = cur.execute("SELECT key FROM local WHERE value != -1")
+        else:
+            res = cur.execute("SELECT key FROM local")
         rows = res.fetchall()
         return [row[0] for row in rows]
 
-    def dump(self) -> dict[str, int]:
+    def dump(self, skip_invalid: bool = True) -> dict[str, int]:
         cur = self.conn.cursor()
-        res = cur.execute("SELECT key, value FROM local")
+        if skip_invalid:
+            res = cur.execute("SELECT key, value FROM local WHERE value != -1")
+        else:
+            res = cur.execute("SELECT key, value FROM local")
         rows = res.fetchall()
         return {row[0]: row[1] for row in rows}
 
-    def dump_json(self) -> None:
-        res = self.dump()
+    def dump_json(self, skip_invalid: bool = True) -> None:
+        res = self.dump(skip_invalid)
         with overwrite(self.jsonpath) as f:
             json.dump(res, f)
 
@@ -396,8 +402,6 @@ class SyncBase:
             local_serial = local[i]
             remote_serial = remote[i]
             if local_serial != remote_serial:
-                if local_serial == -1:
-                    logger.info("skip %s, as it's marked as not exist at upstream", i)
                 to_update.append(i)
         output = Plan(remove=to_remove, update=to_update)
         return output
@@ -538,7 +542,7 @@ class SyncPyPI(SyncBase):
             meta = self.pypi.get_package_metadata(package_name)
             logger.debug("%s meta: %s", package_name, meta)
         except PackageNotFoundError:
-            logger.warning("%s missing from upstream, skip.", package_name)
+            logger.warning("%s missing from upstream, skip and ignore in the future.", package_name)
             if not write_db:
                 return -1
             self.local_db.set(package_name, -1)
