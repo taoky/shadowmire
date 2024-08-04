@@ -396,6 +396,8 @@ class SyncBase:
             local_serial = local[i]
             remote_serial = remote[i]
             if local_serial != remote_serial:
+                if local_serial == -1:
+                    logger.info("skip %s, as it's marked as not exist at upstream", i)
                 to_update.append(i)
         output = Plan(remove=to_remove, update=to_update)
         return output
@@ -537,6 +539,9 @@ class SyncPyPI(SyncBase):
             logger.debug("%s meta: %s", package_name, meta)
         except PackageNotFoundError:
             logger.warning("%s missing from upstream, skip.", package_name)
+            if not write_db:
+                return -1
+            self.local_db.set(package_name, -1)
             return None
 
         # filter prerelease, if necessary
