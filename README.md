@@ -50,6 +50,12 @@ Sync command also supports `--exclude` -- you could give multiple regexes like t
 ./shadowmire.py sync --exclude package1 --exclude ^0
 ```
 
+Also it supports prerelease filtering like [this](https://bandersnatch.readthedocs.io/en/latest/filtering_configuration.html#prerelease-filtering):
+
+```shell
+./shadowmire.py sync --sync-packages --prerelease-exclude '^duckdb$'
+```
+
 And `--shadowmire-upstream`, if you don't want to sync from PyPI directly.
 
 ```shell
