@@ -559,7 +559,7 @@ class SyncPyPI(SyncBase):
             return None
 
         # filter prerelease, if necessary
-        if prerelease_excludes:
+        if match_patterns(package_name, prerelease_excludes):
             for release in list(meta["releases"].keys()):
                 if match_patterns(release, PRERELEASE_PATTERNS):
                     del meta["releases"][release]
