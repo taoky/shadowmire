@@ -146,6 +146,8 @@ def remove_dir_with_files(directory: Path) -> None:
     """
     Remove dir in a safer (non-recursive) way, which means that the directory should have no child directories.
     """
+    if not directory.exists():
+        return
     assert directory.is_dir()
     for item in directory.iterdir():
         item.unlink()
@@ -407,6 +409,7 @@ class SyncBase:
             if local_serial != remote_serial:
                 if local_serial == -1:
                     logger.info("skip %s, as it's marked as not exist at upstream", i)
+                    to_remove.append(i)
                 else:
                     to_update.append(i)
         output = Plan(remove=to_remove, update=to_update)
@@ -474,11 +477,12 @@ class SyncBase:
                         logger.info("Removed file %s", p_path)
                     except FileNotFoundError:
                         pass
+            # remove all files inside meta_dir
+            self.local_db.remove(package_name)
+            remove_dir_with_files(meta_dir)
         except FileNotFoundError:
+            logger.warning("FileNotFoundError when removing %s", package_name)
             pass
-        # remove all files inside meta_dir
-        self.local_db.remove(package_name)
-        remove_dir_with_files(meta_dir)
 
     def do_update(
         self,
