@@ -463,7 +463,7 @@ class SyncBase:
 
         self.parallel_update(to_update, prerelease_excludes)
 
-    def do_remove(self, package_name: str) -> None:
+    def do_remove(self, package_name: str, write_db: bool = True) -> None:
         logger.info("removing %s", package_name)
         meta_dir = self.simple_dir / package_name
         index_html = meta_dir / "index.html"
@@ -478,7 +478,8 @@ class SyncBase:
                     except FileNotFoundError:
                         pass
             # remove all files inside meta_dir
-            self.local_db.remove(package_name)
+            if write_db:
+                self.local_db.remove(package_name)
             remove_dir_with_files(meta_dir)
         except FileNotFoundError:
             logger.warning("FileNotFoundError when removing %s", package_name)
@@ -514,14 +515,18 @@ class SyncBase:
         self.local_db.dump_json()
 
 
-def download(session: requests.Session, url: str, dest: Path) -> bool:
-    resp = session.get(url, allow_redirects=True)
+def download(session: requests.Session, url: str, dest: Path) -> tuple[bool, int]:
+    try:
+        resp = session.get(url, allow_redirects=True)
+    except requests.RequestException:
+        logger.warning("download %s failed with exception", exc_info=True)
+        return False, -1
     if resp.status_code >= 400:
-        logger.warning("download %s failed, skipping this package", url)
-        return False
+        logger.warning("download %s failed with status %s, skipping this package", url, resp.status_code)
+        return False, resp.status_code
     with overwrite(dest, "wb") as f:
         f.write(resp.content)
-    return True
+    return True, resp.status_code
 
 
 class SyncPyPI(SyncBase):
@@ -553,6 +558,8 @@ class SyncPyPI(SyncBase):
             logger.debug("%s meta: %s", package_name, meta)
         except PackageNotFoundError:
             logger.warning("%s missing from upstream, skip and ignore in the future.", package_name)
+            # try remove it locally, if it does not exist upstream
+            self.do_remove(package_name, write_db=False)
             if not write_db:
                 return -1
             self.local_db.set(package_name, -1)
@@ -586,7 +593,10 @@ class SyncPyPI(SyncBase):
                 if dest.exists():
                     continue
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                download(self.session, url, dest)
+                success, code = download(self.session, url, dest)
+                if not success:
+                    logger.warning("skipping %s as it fails downloading", package_name)
+                    return None
 
         last_serial: int = meta["last_serial"]
         simple_html_contents = self.pypi.generate_html_simple_page(meta)
@@ -644,13 +654,16 @@ class SyncPlainHTTP(SyncBase):
         # directly fetch remote files
         for filename in ("index.html", "index.v1_html", "index.v1_json"):
             file_url = urljoin(self.upstream, f"/simple/{package_name}/{filename}")
-            success = download(self.session, file_url, package_simple_path / filename)
+            success, code = download(self.session, file_url, package_simple_path / filename)
             if not success:
                 if filename != "index.html":
-                    logger.warning("%s does not exist", file_url)
+                    logger.warning("index file %s fails", file_url)
                     continue
                 else:
-                    logger.error("%s does not exist. Stop with this.", file_url)
+                    logger.error("critical index file %s fails. Stop with this.", file_url)
+                    if code == 404:
+                        self.do_remove(package_name, write_db=False)
+                    # We don't return -1 here, as shadowmire upstream would fix this inconsistency next time syncing.
                     return None
 
         if self.sync_packages:
@@ -668,7 +681,10 @@ class SyncPlainHTTP(SyncBase):
                 if dest.exists():
                     continue
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                download(self.session, url, dest)
+                success, code = download(self.session, url, dest)
+                if not success:
+                    logger.warning("skipping %s as it fails downloading", package_name)
+                    return None
 
         last_serial = get_local_serial(package_simple_path)
         if not last_serial:
