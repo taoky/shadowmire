@@ -71,6 +71,9 @@ If you already have a pypi repo, use `genlocal` first to generate a local db:
 ./shadowmire.py genlocal
 ```
 
+> [!IMPORTANT]
+> You shall have file `json/<package_name>` before `genlocal`.
+
 Verify command could be used if you believe that something is wrong (inconsistent). It would:
 
 1. remove packages NOT in local db

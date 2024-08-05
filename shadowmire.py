@@ -71,7 +71,7 @@ class LocalVersionKV:
 
     def get(self, key: str) -> Optional[int]:
         cur = self.conn.cursor()
-        res = cur.execute("SELECT key, value FROM local WHERE key = ?", (key,))
+        res = cur.execute("SELECT value FROM local WHERE key = ?", (key,))
         row = res.fetchone()
         return row[0] if row else None
 
@@ -186,13 +186,14 @@ def get_packages_from_index_html(contents: str) -> list[str]:
 
 
 def get_existing_hrefs(package_simple_path: Path) -> list[str]:
+    """
+    There exists packages that have no release files, so when it encounters errors it would return None,
+    otherwise empty list or list with hrefs.
+    """
     existing_hrefs = []
-    try:
-        with open(package_simple_path / "index.html") as f:
-            contents = f.read()
-        existing_hrefs = get_packages_from_index_html(contents)
-    except FileNotFoundError:
-        pass
+    with open(package_simple_path / "index.html") as f:
+        contents = f.read()
+    existing_hrefs = get_packages_from_index_html(contents)
     return existing_hrefs
 
 
@@ -237,21 +238,24 @@ class PyPI:
             raise PackageNotFoundError
         return req.json()
 
-    def get_release_files_from_meta(self, package_meta: dict) -> list[dict]:
+    @staticmethod
+    def get_release_files_from_meta(package_meta: dict) -> list[dict]:
         release_files = []
         for release in package_meta["releases"].values():
             release_files.extend(release)
         release_files.sort(key=lambda x: x["filename"])
         return release_files
 
-    def file_url_to_local_url(self, url: str) -> str:
+    @staticmethod
+    def file_url_to_local_url(url: str) -> str:
         parsed = urlparse(url)
         assert parsed.path.startswith("/packages")
         prefix = "../.."
         return prefix + parsed.path
 
     # Func modified from bandersnatch
-    def generate_html_simple_page(self, package_meta: dict) -> str:
+    @classmethod
+    def generate_html_simple_page(cls, package_meta: dict) -> str:
         package_rawname = package_meta["info"]["name"]
         simple_page_content = (
             "<!DOCTYPE html>\n"
@@ -264,7 +268,7 @@ class PyPI:
             "    <h1>Links for {1}</h1>\n"
         ).format("1.0", package_rawname)
 
-        release_files = self.get_release_files_from_meta(package_meta)
+        release_files = cls.get_release_files_from_meta(package_meta)
 
         def gen_html_file_tags(release: dict) -> str:
             file_tags = ""
@@ -289,9 +293,9 @@ class PyPI:
         simple_page_content += "\n".join(
             [
                 '    <a href="{}#{}={}"{}>{}</a><br/>'.format(
-                    self.file_url_to_local_url(r["url"]),
-                    self.digest_name,
-                    r["digests"][self.digest_name],
+                    cls.file_url_to_local_url(r["url"]),
+                    cls.digest_name,
+                    r["digests"][cls.digest_name],
                     gen_html_file_tags(r),
                     r["filename"],
                 )
@@ -306,7 +310,8 @@ class PyPI:
         return simple_page_content
 
     # Func modified from bandersnatch
-    def generate_json_simple_page(self, package_meta: dict) -> str:
+    @classmethod
+    def generate_json_simple_page(cls, package_meta: dict) -> str:
         package_json: dict[str, Any] = {
             "files": [],
             "meta": {
@@ -318,7 +323,7 @@ class PyPI:
             "versions": sorted(package_meta["releases"].keys()),
         }
 
-        release_files = self.get_release_files_from_meta(package_meta)
+        release_files = cls.get_release_files_from_meta(package_meta)
 
         # Add release files into the JSON dict
         for r in release_files:
@@ -326,12 +331,12 @@ class PyPI:
                 {
                     "filename": r["filename"],
                     "hashes": {
-                        self.digest_name: r["digests"][self.digest_name],
+                        cls.digest_name: r["digests"][cls.digest_name],
                     },
                     "requires-python": r.get("requires_python", ""),
                     "size": r["size"],
                     "upload-time": r.get("upload_time_iso_8601", ""),
-                    "url": self.file_url_to_local_url(r["url"]),
+                    "url": cls.file_url_to_local_url(r["url"]),
                     "yanked": r.get("yanked", False),
                 }
             )
@@ -366,9 +371,11 @@ class SyncBase:
         self.local_db = local_db
         self.simple_dir = basedir / "simple"
         self.packages_dir = basedir / "packages"
+        self.jsonmeta_dir = basedir / "json"
         # create the dirs, if not exist
         self.simple_dir.mkdir(parents=True, exist_ok=True)
         self.packages_dir.mkdir(parents=True, exist_ok=True)
+        self.jsonmeta_dir.mkdir(parents=True, exist_ok=True)
         self.sync_packages = sync_packages
 
     def filter_remote_with_excludes(
@@ -421,9 +428,15 @@ class SyncBase:
     def check_and_update(self, package_names: list[str]) -> None:
         to_update = []
         for package_name in tqdm(package_names, desc="Checking consistency"):
+            package_jsonmeta_path = self.basedir / "json" / package_name
+            if not package_jsonmeta_path.exists():
+                to_update.append(package_name)
+                continue
             package_simple_path = self.basedir / "simple" / package_name
-            hrefs = get_existing_hrefs(package_simple_path)
-            if not hrefs:
+            try:
+                hrefs = get_existing_hrefs(package_simple_path)
+            except Exception:
+                # something unexpected happens...
                 to_update.append(package_name)
                 continue
             # OK, check if all hrefs have corresponding files
@@ -452,7 +465,9 @@ class SyncBase:
                 for idx, package_name in enumerate(package_names)
             }
             try:
-                for future in tqdm(as_completed(futures), total=len(package_names), desc="Updating"):
+                for future in tqdm(
+                    as_completed(futures), total=len(package_names), desc="Updating"
+                ):
                     idx, package_name = futures[future]
                     try:
                         serial = future.result()
@@ -483,35 +498,48 @@ class SyncBase:
 
         self.parallel_update(to_update, prerelease_excludes)
 
-    def do_remove(self, package_name: str, write_db: bool = True) -> None:
-        logger.info("removing %s", package_name)
-        meta_dir = self.simple_dir / package_name
-        index_html = meta_dir / "index.html"
-        try:
+    def do_remove(self, package_name: str, use_db: bool = True) -> None:
+        metajson_path = self.jsonmeta_dir / package_name
+        if metajson_path.exists():
+            # To make this less noisy...
+            logger.info("removing %s", package_name)
+        package_simple_dir = self.simple_dir / package_name
+        index_html = package_simple_dir / "index.html"
+        if index_html.exists():
             with open(index_html) as f:
                 packages_to_remove = get_packages_from_index_html(f.read())
-                for p in packages_to_remove:
-                    p_path = meta_dir / p
-                    try:
-                        p_path.unlink()
-                        logger.info("Removed file %s", p_path)
-                    except FileNotFoundError:
-                        pass
-            # remove all files inside meta_dir
-            if write_db:
+                paths_to_remove = [package_simple_dir / p for p in packages_to_remove]
+                for p in paths_to_remove:
+                    if p.exists():
+                        p.unlink()
+                        logger.info("Removed file %s", p)
+        remove_dir_with_files(package_simple_dir)
+        metajson_path = self.jsonmeta_dir / package_name
+        metajson_path.unlink(missing_ok=True)
+        if use_db:
+            old_serial = self.local_db.get(package_name)
+            if old_serial != -1:
                 self.local_db.remove(package_name)
-            remove_dir_with_files(meta_dir)
-        except FileNotFoundError:
-            logger.warning("FileNotFoundError when removing %s", package_name)
-            pass
 
     def do_update(
         self,
         package_name: str,
         prerelease_excludes: list[re.Pattern[str]],
-        write_db: bool = True,
+        use_db: bool = True,
     ) -> Optional[int]:
         raise NotImplementedError
+
+    def write_meta_to_simple(self, package_simple_path: Path, meta: dict) -> None:
+        simple_html_contents = PyPI.generate_html_simple_page(meta)
+        simple_json_contents = PyPI.generate_json_simple_page(meta)
+        for html_filename in ("index.html", "index.v1_html"):
+            html_path = package_simple_path / html_filename
+            with overwrite(html_path) as f:
+                f.write(simple_html_contents)
+        for json_filename in ("index.v1_json",):
+            json_path = package_simple_path / json_filename
+            with overwrite(json_path) as f:
+                f.write(simple_json_contents)
 
     def finalize(self) -> None:
         local_names = self.local_db.keys()
@@ -535,22 +563,24 @@ class SyncBase:
         self.local_db.dump_json()
 
 
-def download(session: requests.Session, url: str, dest: Path) -> tuple[bool, int]:
+def download(
+    session: requests.Session, url: str, dest: Path
+) -> tuple[bool, Optional[requests.Response]]:
     try:
         resp = session.get(url, allow_redirects=True)
     except requests.RequestException:
         logger.warning("download %s failed with exception", exc_info=True)
-        return False, -1
+        return False, None
     if resp.status_code >= 400:
         logger.warning(
             "download %s failed with status %s, skipping this package",
             url,
             resp.status_code,
         )
-        return False, resp.status_code
+        return False, resp
     with overwrite(dest, "wb") as f:
         f.write(resp.content)
-    return True, resp.status_code
+    return True, resp
 
 
 class SyncPyPI(SyncBase):
@@ -572,7 +602,7 @@ class SyncPyPI(SyncBase):
         self,
         package_name: str,
         prerelease_excludes: list[re.Pattern[str]],
-        write_db: bool = True,
+        use_db: bool = True,
     ) -> Optional[int]:
         logger.info("updating %s", package_name)
         package_simple_path = self.simple_dir / package_name
@@ -582,11 +612,12 @@ class SyncPyPI(SyncBase):
             logger.debug("%s meta: %s", package_name, meta)
         except PackageNotFoundError:
             logger.warning(
-                "%s missing from upstream, skip and ignore in the future.", package_name
+                "%s missing from upstream, remove and ignore in the future.",
+                package_name,
             )
             # try remove it locally, if it does not exist upstream
-            self.do_remove(package_name, write_db=False)
-            if not write_db:
+            self.do_remove(package_name, use_db=False)
+            if not use_db:
                 return -1
             self.local_db.set(package_name, -1)
             return None
@@ -600,7 +631,7 @@ class SyncPyPI(SyncBase):
         if self.sync_packages:
             # sync packages first, then sync index
             existing_hrefs = get_existing_hrefs(package_simple_path)
-            release_files = self.pypi.get_release_files_from_meta(meta)
+            release_files = PyPI.get_release_files_from_meta(meta)
             # remove packages that no longer exist remotely
             remote_hrefs = [
                 self.pypi.file_url_to_local_url(i["url"]) for i in release_files
@@ -619,25 +650,19 @@ class SyncPyPI(SyncBase):
                 if dest.exists():
                     continue
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                success, code = download(self.session, url, dest)
+                success, resp = download(self.session, url, dest)
                 if not success:
                     logger.warning("skipping %s as it fails downloading", package_name)
                     return None
 
         last_serial: int = meta["last_serial"]
-        simple_html_contents = self.pypi.generate_html_simple_page(meta)
-        simple_json_contents = self.pypi.generate_json_simple_page(meta)
 
-        for html_filename in ("index.html", "index.v1_html"):
-            html_path = package_simple_path / html_filename
-            with overwrite(html_path) as f:
-                f.write(simple_html_contents)
-        for json_filename in ("index.v1_json",):
-            json_path = package_simple_path / json_filename
-            with overwrite(json_path) as f:
-                f.write(simple_json_contents)
+        self.write_meta_to_simple(package_simple_path, meta)
+        json_meta_path = self.jsonmeta_dir / package_name
+        with overwrite(json_meta_path) as f:
+            json.dump(meta, f)
 
-        if write_db:
+        if use_db:
             self.local_db.set(package_name, last_serial)
 
         return last_serial
@@ -666,7 +691,7 @@ class SyncPlainHTTP(SyncBase):
         self,
         package_name: str,
         prerelease_excludes: list[re.Pattern[str]],
-        write_db: bool = True,
+        use_db: bool = True,
     ) -> Optional[int]:
         if prerelease_excludes:
             logger.warning(
@@ -677,68 +702,65 @@ class SyncPlainHTTP(SyncBase):
         package_simple_path.mkdir(exist_ok=True)
         if self.sync_packages:
             existing_hrefs = get_existing_hrefs(package_simple_path)
-        # directly fetch remote files
-        for filename in ("index.html", "index.v1_html", "index.v1_json"):
-            file_url = urljoin(self.upstream, f"/simple/{package_name}/{filename}")
-            # Don't overwrite existing index first!
-            success, code = download(
-                self.session, file_url, package_simple_path / (filename + ".new")
+        # Download JSON meta
+        file_url = urljoin(self.upstream, f"/json/{package_name}")
+        success, resp = download(
+            self.session, file_url, self.jsonmeta_dir / (package_name + ".new")
+        )
+        if not success:
+            logger.error(
+                "download %s JSON meta fails with code %s",
+                package_name,
+                resp.status_code if resp else None,
             )
-            if not success:
-                if filename != "index.html":
-                    logger.warning("index file %s fails", file_url)
-                    continue
-                else:
-                    logger.error(
-                        "critical index file %s fails. Stop with this.", file_url
-                    )
-                    if code == 404:
-                        self.do_remove(package_name, write_db=False)
-                    # We don't return -1 here, as shadowmire upstream would fix this inconsistency next time syncing.
-                    return None
+            return None
+        assert resp
+        meta = resp.json()
 
         if self.sync_packages:
-            current_hrefs = get_existing_hrefs(package_simple_path)
-            should_remove = list(set(existing_hrefs) - set(current_hrefs))
+            release_files = PyPI.get_release_files_from_meta(meta)
+            remote_hrefs = [PyPI.file_url_to_local_url(i["url"]) for i in release_files]
+            should_remove = list(set(existing_hrefs) - set(remote_hrefs))
             for p in should_remove:
                 logger.info("removing file %s (if exists)", p)
                 package_path = (package_simple_path / p).resolve()
                 package_path.unlink(missing_ok=True)
             package_simple_url = urljoin(self.upstream, f"/simple/{package_name}/")
-            for href in current_hrefs:
+            for href in remote_hrefs:
                 url = urljoin(package_simple_url, href)
                 dest = (package_simple_path / href).resolve()
                 logger.info("downloading file %s -> %s", url, dest)
                 if dest.exists():
                     continue
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                success, code = download(self.session, url, dest)
+                success, resp = download(self.session, url, dest)
                 if not success:
                     logger.warning("skipping %s as it fails downloading", package_name)
                     return None
 
         # OK, now it's safe to rename
-        for filename in ("index.html", "index.v1_html", "index.v1_json"):
-            file_from = package_simple_path / (filename + ".new")
-            file_to = package_simple_path / filename
-            try:
-                file_from.rename(file_to)
-            except FileNotFoundError:
-                pass
+        (self.jsonmeta_dir / (package_name + ".new")).rename(
+            self.jsonmeta_dir / package_name
+        )
+        # generate indexes
+        self.write_meta_to_simple(package_simple_path, meta)
 
         last_serial = get_local_serial(package_simple_path)
         if not last_serial:
             logger.warning("cannot get valid package serial from %s", package_name)
         else:
-            if write_db:
+            if use_db:
                 self.local_db.set(package_name, last_serial)
 
         return last_serial
 
 
-def get_local_serial(package_simple_path: Path) -> Optional[int]:
-    package_name = package_simple_path.name
-    package_index_path = package_simple_path / "index.html"
+def get_local_serial(package_meta_path: Path) -> Optional[int]:
+    """
+    Accepts /json/<package_name> as package_meta_path
+    """
+    package_name = package_meta_path.name
+    package_index_path = package_meta_path / "index.html"
     try:
         with open(package_index_path) as f:
             contents = f.read()
@@ -746,11 +768,10 @@ def get_local_serial(package_simple_path: Path) -> Optional[int]:
         logger.warning("%s does not have index.html, skipping", package_name)
         return None
     try:
-        serial_comment = contents.splitlines()[-1].strip()
-        serial = int(serial_comment.removeprefix("<!--SERIAL ").removesuffix("-->"))
-        return serial
+        meta = json.loads(contents)
+        return meta["last_serial"]
     except Exception:
-        logger.warning("cannot parse %s index.html", package_name, exc_info=True)
+        logger.warning("cannot parse %s's JSON metadata", package_name, exc_info=True)
         return None
 
 
@@ -850,15 +871,15 @@ def sync(
     syncer.finalize()
 
 
-@cli.command(help="(Re)generate local db and json from simple/")
+@cli.command(help="(Re)generate local db and json from json/")
 @click.pass_context
 def genlocal(ctx: click.Context) -> None:
     basedir: Path = ctx.obj["basedir"]
     local_db: LocalVersionKV = ctx.obj["local_db"]
     local = {}
-    for package_path in (basedir / "simple").iterdir():
-        package_name = package_path.name
-        serial = get_local_serial(package_path)
+    for package_metapath in (basedir / "json").iterdir():
+        package_name = package_metapath.name
+        serial = get_local_serial(package_metapath)
         if serial:
             local[package_name] = serial
     local_db.nuke(commit=False)
