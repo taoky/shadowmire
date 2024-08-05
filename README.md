@@ -27,6 +27,9 @@ Obviously, `list_packages_with_serial()`'s alternative is the `local.json`, whic
 
 ### How to use
 
+> [!IMPORTANT]
+> Shadowmire is still in experimental state. Please consider take a snapshot before using (if you're using ZFS/BtrFS), to avoid Shadowmire eating all you packages in accident.
+
 If you just need to fetch all indexes (and then use a cache solution for packages):
 
 ```shell
