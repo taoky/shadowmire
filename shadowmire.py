@@ -418,6 +418,26 @@ class SyncBase:
     def fetch_remote_versions(self) -> dict[str, int]:
         raise NotImplementedError
 
+    def check_and_update(self, package_names: list[str]) -> None:
+        to_update = []
+        for package_name in tqdm(package_names, desc="Checking consistency"):
+            package_simple_path = self.basedir / "simple" / package_name
+            hrefs = get_existing_hrefs(package_simple_path)
+            if not hrefs:
+                to_update.append(package_name)
+                continue
+            # OK, check if all hrefs have corresponding files
+            if self.sync_packages:
+                should_update = False
+                for href in hrefs:
+                    dest = (package_simple_path / href).resolve()
+                    if not dest.exists():
+                        should_update = True
+                        break
+                if should_update:
+                    to_update.append(package_name)
+        self.parallel_update(to_update, [])
+
     def parallel_update(
         self, package_names: list, prerelease_excludes: list[re.Pattern[str]]
     ) -> None:
@@ -432,7 +452,7 @@ class SyncBase:
                 for idx, package_name in enumerate(package_names)
             }
             try:
-                for future in tqdm(as_completed(futures), total=len(package_names)):
+                for future in tqdm(as_completed(futures), total=len(package_names), desc="Updating"):
                     idx, package_name = futures[future]
                     try:
                         serial = future.result()
@@ -522,7 +542,11 @@ def download(session: requests.Session, url: str, dest: Path) -> tuple[bool, int
         logger.warning("download %s failed with exception", exc_info=True)
         return False, -1
     if resp.status_code >= 400:
-        logger.warning("download %s failed with status %s, skipping this package", url, resp.status_code)
+        logger.warning(
+            "download %s failed with status %s, skipping this package",
+            url,
+            resp.status_code,
+        )
         return False, resp.status_code
     with overwrite(dest, "wb") as f:
         f.write(resp.content)
@@ -557,7 +581,9 @@ class SyncPyPI(SyncBase):
             meta = self.pypi.get_package_metadata(package_name)
             logger.debug("%s meta: %s", package_name, meta)
         except PackageNotFoundError:
-            logger.warning("%s missing from upstream, skip and ignore in the future.", package_name)
+            logger.warning(
+                "%s missing from upstream, skip and ignore in the future.", package_name
+            )
             # try remove it locally, if it does not exist upstream
             self.do_remove(package_name, write_db=False)
             if not write_db:
@@ -655,13 +681,17 @@ class SyncPlainHTTP(SyncBase):
         for filename in ("index.html", "index.v1_html", "index.v1_json"):
             file_url = urljoin(self.upstream, f"/simple/{package_name}/{filename}")
             # Don't overwrite existing index first!
-            success, code = download(self.session, file_url, package_simple_path / (filename + ".new"))
+            success, code = download(
+                self.session, file_url, package_simple_path / (filename + ".new")
+            )
             if not success:
                 if filename != "index.html":
                     logger.warning("index file %s fails", file_url)
                     continue
                 else:
-                    logger.error("critical index file %s fails. Stop with this.", file_url)
+                    logger.error(
+                        "critical index file %s fails. Stop with this.", file_url
+                    )
                     if code == 404:
                         self.do_remove(package_name, write_db=False)
                     # We don't return -1 here, as shadowmire upstream would fix this inconsistency next time syncing.
@@ -686,7 +716,7 @@ class SyncPlainHTTP(SyncBase):
                 if not success:
                     logger.warning("skipping %s as it fails downloading", package_name)
                     return None
-        
+
         # OK, now it's safe to rename
         for filename in ("index.html", "index.v1_html", "index.v1_json"):
             file_from = package_simple_path / (filename + ".new")
@@ -851,15 +881,23 @@ def verify(
     basedir: Path = ctx.obj["basedir"]
     local_db: LocalVersionKV = ctx.obj["local_db"]
     excludes = exclude_to_excludes(exclude)
-    prerelease_excludes = exclude_to_excludes(prerelease_exclude)
+    # prerelease_excludes = exclude_to_excludes(prerelease_exclude)
     syncer = get_syncer(basedir, local_db, sync_packages, shadowmire_upstream)
+    # 1. remove packages NOT in local db
     local_names = set(local_db.keys())
     simple_dirs = set([i.name for i in (basedir / "simple").iterdir() if i.is_dir()])
     for package_name in simple_dirs - local_names:
         syncer.do_remove(package_name)
-    syncer.parallel_update(list(local_names), prerelease_excludes)
+    # 2. remove packages NOT in remote
+    local = local_db.dump(skip_invalid=False)
+    plan = syncer.determine_sync_plan(local, excludes)
+    for package_name in plan.remove:
+        # We only take the plan.remove part here
+        syncer.do_remove(package_name)
+    # 3. make sure all local indexes are valid, and (if --sync-packages) have valid local package files
+    syncer.check_and_update(list(local_names))
     syncer.finalize()
-    # clean up unreferenced package files
+    # 4. delete unreferenced files in `packages` folder
     ref_set = set()
     for sname in simple_dirs:
         sd = basedir / "simple" / sname
