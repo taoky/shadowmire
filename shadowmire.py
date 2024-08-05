@@ -654,7 +654,8 @@ class SyncPlainHTTP(SyncBase):
         # directly fetch remote files
         for filename in ("index.html", "index.v1_html", "index.v1_json"):
             file_url = urljoin(self.upstream, f"/simple/{package_name}/{filename}")
-            success, code = download(self.session, file_url, package_simple_path / filename)
+            # Don't overwrite existing index first!
+            success, code = download(self.session, file_url, package_simple_path / (filename + ".new"))
             if not success:
                 if filename != "index.html":
                     logger.warning("index file %s fails", file_url)
@@ -685,6 +686,15 @@ class SyncPlainHTTP(SyncBase):
                 if not success:
                     logger.warning("skipping %s as it fails downloading", package_name)
                     return None
+        
+        # OK, now it's safe to rename
+        for filename in ("index.html", "index.v1_html", "index.v1_json"):
+            file_from = package_simple_path / (filename + ".new")
+            file_to = package_simple_path / filename
+            try:
+                file_from.rename(file_to)
+            except FileNotFoundError:
+                pass
 
         last_serial = get_local_serial(package_simple_path)
         if not last_serial:
