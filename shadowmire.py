@@ -433,6 +433,8 @@ class SyncBase:
         """
         remote = self.fetch_remote_versions()
         remote = self.filter_remote_with_excludes(remote, excludes)
+        with open("remote_excluded.json", "w") as f:
+            json.dump(remote, f)
 
         to_remove = []
         to_update = []
@@ -671,6 +673,7 @@ class SyncPyPI(SyncBase):
         ret = {}
         for key in remote_serials:
             ret[normalize(key)] = remote_serials[key]
+        logger.info("Remote has %s packages", len(ret))
         with overwrite(self.basedir / "remote.json") as f:
             json.dump(ret, f)
             logger.info("File saved to remote.json.")
@@ -764,6 +767,7 @@ class SyncPlainHTTP(SyncBase):
         resp = self.session.get(remote_url)
         resp.raise_for_status()
         remote: dict[str, int] = resp.json()
+        logger.info("Remote has %s packages", len(remote))
         with overwrite(self.basedir / "remote.json") as f:
             json.dump(remote, f)
             logger.info("File saved to remote.json.")
