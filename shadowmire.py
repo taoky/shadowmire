@@ -120,7 +120,7 @@ class LocalVersionKV:
     def dump_json(self, skip_invalid: bool = True) -> None:
         res = self.dump(skip_invalid)
         with overwrite(self.jsonpath) as f:
-            json.dump(res, f)
+            json.dump(res, f, indent=2)
 
 
 @contextmanager
@@ -185,15 +185,18 @@ def get_packages_from_index_html(contents: str) -> list[str]:
     return ret
 
 
-def get_existing_hrefs(package_simple_path: Path) -> list[str]:
+def get_existing_hrefs(package_simple_path: Path) -> Optional[list[str]]:
     """
     There exists packages that have no release files, so when it encounters errors it would return None,
     otherwise empty list or list with hrefs.
     """
     existing_hrefs = []
-    with open(package_simple_path / "index.html") as f:
-        contents = f.read()
-    existing_hrefs = get_packages_from_index_html(contents)
+    try:
+        with open(package_simple_path / "index.html") as f:
+            contents = f.read()
+        existing_hrefs = get_packages_from_index_html(contents)
+    except FileNotFoundError:
+        return None
     return existing_hrefs
 
 
@@ -433,9 +436,8 @@ class SyncBase:
                 to_update.append(package_name)
                 continue
             package_simple_path = self.simple_dir / package_name
-            try:
-                hrefs = get_existing_hrefs(package_simple_path)
-            except Exception:
+            hrefs = get_existing_hrefs(package_simple_path)
+            if hrefs is None:
                 # something unexpected happens...
                 to_update.append(package_name)
                 continue
@@ -631,6 +633,7 @@ class SyncPyPI(SyncBase):
         if self.sync_packages:
             # sync packages first, then sync index
             existing_hrefs = get_existing_hrefs(package_simple_path)
+            existing_hrefs = [] if existing_hrefs is None else existing_hrefs
             release_files = PyPI.get_release_files_from_meta(meta)
             # remove packages that no longer exist remotely
             remote_hrefs = [
@@ -702,6 +705,7 @@ class SyncPlainHTTP(SyncBase):
         package_simple_path.mkdir(exist_ok=True)
         if self.sync_packages:
             existing_hrefs = get_existing_hrefs(package_simple_path)
+            existing_hrefs = [] if existing_hrefs is None else existing_hrefs
         # Download JSON meta
         file_url = urljoin(self.upstream, f"/json/{package_name}")
         success, resp = download(
@@ -876,7 +880,7 @@ def genlocal(ctx: click.Context) -> None:
     basedir: Path = ctx.obj["basedir"]
     local_db: LocalVersionKV = ctx.obj["local_db"]
     local = {}
-    for package_metapath in (basedir / "json").iterdir():
+    for package_metapath in tqdm((basedir / "json").iterdir(), desc="Iterating json/"):
         if not package_metapath.is_file():
             continue
         package_name = package_metapath.name
@@ -924,6 +928,7 @@ def verify(
     for sname in simple_dirs:
         sd = basedir / "simple" / sname
         hrefs = get_existing_hrefs(sd)
+        hrefs = [] if hrefs is None else hrefs
         for i in hrefs:
             ref_set.add(str((sd / i).resolve()))
     for file in (basedir / "packages").glob("*/*/*/*"):
