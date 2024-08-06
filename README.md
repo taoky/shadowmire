@@ -78,7 +78,7 @@ If you already have a pypi repo, use `genlocal` first to generate a local db:
 
 Verify command could be used if you believe that something is wrong (inconsistent). It would:
 
-1. remove packages NOT in local db
+1. remove packages NOT in local db (skip by default, it would only print package names without `--remove-not-in-local`)
 2. remove packages NOT in remote (with consideration of `--exclude`)
 3. make sure all local indexes are valid, and (if --sync-packages) have valid local package files
 

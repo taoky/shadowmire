@@ -1008,7 +1008,7 @@ def genlocal(ctx: click.Context) -> None:
 )
 @click.pass_context
 @sync_shared_args
-@click.option("--no-remove-not-in-local", is_flag=True, help="Skip step 1")
+@click.option("--remove-not-in-local", is_flag=True, help="Do step 1 instead of skipping")
 @click.option(
     "--compare-size",
     is_flag=True,
@@ -1020,7 +1020,7 @@ def verify(
     shadowmire_upstream: Optional[str],
     exclude: tuple[str],
     prerelease_exclude: tuple[str],
-    no_remove_not_in_local: bool,
+    remove_not_in_local: bool,
     compare_size: bool,
 ) -> None:
     basedir: Path = ctx.obj["basedir"]
@@ -1036,7 +1036,7 @@ def verify(
     logger.info("%s packages NOT in local db", len(not_in_local))
     for package_name in not_in_local:
         logger.debug("package %s not in local db", package_name)
-        if not no_remove_not_in_local:
+        if remove_not_in_local:
             syncer.do_remove(package_name)
 
     logger.info("remove packages NOT in remote")
