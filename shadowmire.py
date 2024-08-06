@@ -975,12 +975,16 @@ def genlocal(ctx: click.Context) -> None:
 )
 @click.pass_context
 @sync_shared_args
+@click.option(
+    "--no-remove-not-in-local", is_flag=True, help="Skip step 1"
+)
 def verify(
     ctx: click.Context,
     sync_packages: bool,
     shadowmire_upstream: Optional[str],
     exclude: tuple[str],
     prerelease_exclude: tuple[str],
+    no_remove_not_in_local: bool,
 ) -> None:
     basedir: Path = ctx.obj["basedir"]
     local_db: LocalVersionKV = ctx.obj["local_db"]
@@ -993,7 +997,8 @@ def verify(
     simple_dirs = set([i.name for i in (basedir / "simple").iterdir() if i.is_dir()])
     for package_name in simple_dirs - local_names:
         logger.debug("package %s not in local db", package_name)
-        syncer.do_remove(package_name)
+        if not no_remove_not_in_local:
+            syncer.do_remove(package_name)
 
     logger.info("remove packages NOT in remote")
     local = local_db.dump(skip_invalid=False)
