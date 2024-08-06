@@ -428,11 +428,11 @@ class SyncBase:
     def check_and_update(self, package_names: list[str]) -> None:
         to_update = []
         for package_name in tqdm(package_names, desc="Checking consistency"):
-            package_jsonmeta_path = self.basedir / "json" / package_name
+            package_jsonmeta_path = self.jsonmeta_dir / package_name
             if not package_jsonmeta_path.exists():
                 to_update.append(package_name)
                 continue
-            package_simple_path = self.basedir / "simple" / package_name
+            package_simple_path = self.simple_dir / package_name
             try:
                 hrefs = get_existing_hrefs(package_simple_path)
             except Exception:
@@ -760,9 +760,8 @@ def get_local_serial(package_meta_path: Path) -> Optional[int]:
     Accepts /json/<package_name> as package_meta_path
     """
     package_name = package_meta_path.name
-    package_index_path = package_meta_path / "index.html"
     try:
-        with open(package_index_path) as f:
+        with open(package_meta_path) as f:
             contents = f.read()
     except FileNotFoundError:
         logger.warning("%s does not have index.html, skipping", package_name)
@@ -878,6 +877,8 @@ def genlocal(ctx: click.Context) -> None:
     local_db: LocalVersionKV = ctx.obj["local_db"]
     local = {}
     for package_metapath in (basedir / "json").iterdir():
+        if not package_metapath.is_file():
+            continue
         package_name = package_metapath.name
         serial = get_local_serial(package_metapath)
         if serial:
