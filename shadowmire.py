@@ -909,21 +909,25 @@ def verify(
     excludes = exclude_to_excludes(exclude)
     # prerelease_excludes = exclude_to_excludes(prerelease_exclude)
     syncer = get_syncer(basedir, local_db, sync_packages, shadowmire_upstream)
-    # 1. remove packages NOT in local db
+
+    logger.info("remove packages NOT in local db")
     local_names = set(local_db.keys())
     simple_dirs = set([i.name for i in (basedir / "simple").iterdir() if i.is_dir()])
     for package_name in simple_dirs - local_names:
         syncer.do_remove(package_name)
-    # 2. remove packages NOT in remote
+
+    logger.info("remove packages NOT in remote")
     local = local_db.dump(skip_invalid=False)
     plan = syncer.determine_sync_plan(local, excludes)
     for package_name in plan.remove:
         # We only take the plan.remove part here
         syncer.do_remove(package_name)
-    # 3. make sure all local indexes are valid, and (if --sync-packages) have valid local package files
+    
+    logger.info("make sure all local indexes are valid, and (if --sync-packages) have valid local package files")
     syncer.check_and_update(list(local_names))
     syncer.finalize()
-    # 4. delete unreferenced files in `packages` folder
+
+    logger.info("delete unreferenced files in `packages` folder")
     ref_set = set()
     for sname in simple_dirs:
         sd = basedir / "simple" / sname
