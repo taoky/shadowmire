@@ -16,6 +16,7 @@ import sqlite3
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import signal
 import tomllib
+from copy import deepcopy
 import requests
 import click
 from tqdm import tqdm
@@ -337,7 +338,7 @@ class PyPI:
                 "_last-serial": str(package_meta["last_serial"]),
             },
             "name": package_meta["info"]["name"],
-            # TODO: Just sorting by default sort - Maybe specify order in future PEP
+            # (bandsnatch) TODO: Just sorting by default sort - Maybe specify order in future PEP
             "versions": sorted(package_meta["releases"].keys()),
         }
 
@@ -638,6 +639,7 @@ class SyncPyPI(SyncBase):
         package_simple_path.mkdir(exist_ok=True)
         try:
             meta = self.pypi.get_package_metadata(package_name)
+            meta_original = deepcopy(meta)
             logger.debug("%s meta: %s", package_name, meta)
         except PackageNotFoundError:
             logger.warning(
@@ -690,7 +692,8 @@ class SyncPyPI(SyncBase):
         self.write_meta_to_simple(package_simple_path, meta)
         json_meta_path = self.jsonmeta_dir / package_name
         with overwrite(json_meta_path) as f:
-            json.dump(meta, f)
+            # Note that we're writing meta_original here!
+            json.dump(meta_original, f)
 
         if use_db:
             self.local_db.set(package_name, last_serial)
@@ -724,6 +727,7 @@ class SyncPlainHTTP(SyncBase):
         use_db: bool = True,
     ) -> Optional[int]:
         if prerelease_excludes:
+            # TODO
             logger.warning(
                 "prerelease_excludes is currently ignored in SyncPlainHTTP mode."
             )
