@@ -204,10 +204,12 @@ def get_package_urls_from_index_json(json_path: Path) -> list[str]:
 def get_package_urls_size_from_index_json(json_path: Path) -> list[tuple[str, int]]:
     """
     Get all urls and size from given simple/<package>/index.v1_json contents
+
+    If size is not available, returns size as -1
     """
     with open(json_path) as f:
         contents_dict = json.load(f)
-    ret = [(i["url"], i["size"]) for i in contents_dict["files"]]
+    ret = [(i["url"], i.get("size", -1)) for i in contents_dict["files"]]
     return ret
 
 
@@ -504,7 +506,7 @@ class SyncBase:
                         logger.info("add %s as it's missing packages", package_name)
                         should_update = True
                         break
-                    if compare_size:
+                    if compare_size and size != -1:
                         dest_size = dest.stat().st_size
                         if dest_size != size:
                             logger.info(
@@ -1051,7 +1053,7 @@ def verify(
     logger.info("remove packages NOT in remote")
     local = local_db.dump(skip_invalid=False)
     plan = syncer.determine_sync_plan(local, excludes)
-    logger.info("%s packages NOT in remote", len(plan.remove))
+    logger.info("%s packages NOT in remote -- this might contain packages that also do not exist locally", len(plan.remove))
     for package_name in plan.remove:
         # We only take the plan.remove part here
         logger.debug("package %s not in remote index", package_name)
