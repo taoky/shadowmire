@@ -423,9 +423,7 @@ class SyncBase:
         """
         remote = self.fetch_remote_versions()
         remote = self.filter_remote_with_excludes(remote, excludes)
-        # store remote to remote.json
-        with overwrite(self.basedir / "remote.json") as f:
-            json.dump(remote, f)
+
         to_remove = []
         to_update = []
         local_keys = set(local.keys())
@@ -522,6 +520,7 @@ class SyncBase:
                             "%s generated an exception", package_name, exc_info=True
                         )
                     if idx % 100 == 0:
+                        logger.info("dumping local db...")
                         self.local_db.dump_json()
             except (ExitProgramException, KeyboardInterrupt):
                 logger.info("Get ExitProgramException or KeyboardInterrupt, exiting...")
@@ -644,6 +643,9 @@ class SyncPyPI(SyncBase):
         ret = {}
         for key in remote_serials:
             ret[normalize(key)] = remote_serials[key]
+        with overwrite(self.basedir / "remote.json") as f:
+            json.dump(ret, f)
+            logger.info("File saved to remote.json.")
         return ret
 
     def do_update(
@@ -734,6 +736,9 @@ class SyncPlainHTTP(SyncBase):
         resp = self.session.get(remote_url)
         resp.raise_for_status()
         remote: dict[str, int] = resp.json()
+        with overwrite(self.basedir / "remote.json") as f:
+            json.dump(remote, f)
+            logger.info("File saved to remote.json.")
         return remote
 
     def do_update(
@@ -951,9 +956,11 @@ def genlocal(ctx: click.Context) -> None:
     basedir: Path = ctx.obj["basedir"]
     local_db: LocalVersionKV = ctx.obj["local_db"]
     local = {}
-    for package_metapath in tqdm((basedir / "json").iterdir(), desc="Iterating json/"):
-        if not package_metapath.is_file():
-            continue
+    json_dir = basedir / "json"
+    logger.info("Iterating all items under %s", json_dir)
+    dir_items = [d for d in json_dir.iterdir() if d.is_file()]
+    logger.info("Detected %s packages in %s in total", len(dir_items), json_dir)
+    for package_metapath in tqdm(dir_items, desc="Reading packages from json/"):
         package_name = package_metapath.name
         serial = get_local_serial(package_metapath)
         if serial:
@@ -985,6 +992,7 @@ def verify(
     local_names = set(local_db.keys())
     simple_dirs = set([i.name for i in (basedir / "simple").iterdir() if i.is_dir()])
     for package_name in simple_dirs - local_names:
+        logger.debug("package %s not in local db", package_name)
         syncer.do_remove(package_name)
 
     logger.info("remove packages NOT in remote")
@@ -992,6 +1000,7 @@ def verify(
     plan = syncer.determine_sync_plan(local, excludes)
     for package_name in plan.remove:
         # We only take the plan.remove part here
+        logger.debug("package %s not in remote index", package_name)
         syncer.do_remove(package_name)
 
     logger.info(
@@ -1055,6 +1064,15 @@ def do_remove(
         logger.warning("exclusion rules are ignored in do_remove()")
     syncer = get_syncer(basedir, local_db, sync_packages, shadowmire_upstream)
     syncer.do_remove(package_name)
+
+
+@cli.command(help="Call pypi list_packages_with_serial() for debugging")
+@click.pass_context
+def list_packages_with_serial(ctx: click.Context) -> None:
+    basedir = ctx.obj["basedir"]
+    local_db = ctx.obj["local_db"]
+    syncer = SyncPyPI(basedir, local_db)
+    syncer.fetch_remote_versions()
 
 
 if __name__ == "__main__":
