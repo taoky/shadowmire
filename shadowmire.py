@@ -433,7 +433,7 @@ class SyncBase:
         """
         remote = self.fetch_remote_versions()
         remote = self.filter_remote_with_excludes(remote, excludes)
-        with open("remote_excluded.json", "w") as f:
+        with open(self.basedir / "remote_excluded.json", "w") as f:
             json.dump(remote, f)
 
         to_remove = []
