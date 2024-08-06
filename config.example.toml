@@ -1,0 +1,9 @@
+[options]
+sync_packages = true
+# shadowmire_upstream = http://example.com/pypi/web/
+exclude = [
+    "[a-z]"
+]
+prerelease_exclude = [
+    ".+"
+]

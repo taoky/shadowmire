@@ -15,6 +15,7 @@ from contextlib import contextmanager
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import signal
+import tomllib
 import requests
 import click
 from tqdm import tqdm
@@ -481,7 +482,7 @@ class SyncBase:
                         logger.warning(
                             "%s generated an exception", package_name, exc_info=True
                         )
-                    if idx % 1000 == 0:
+                    if idx % 100 == 0:
                         self.local_db.dump_json()
             except (ExitProgramException, KeyboardInterrupt):
                 logger.info("Get ExitProgramException or KeyboardInterrupt, exiting...")
@@ -704,8 +705,8 @@ class SyncPlainHTTP(SyncBase):
         package_simple_path = self.simple_dir / package_name
         package_simple_path.mkdir(exist_ok=True)
         if self.sync_packages:
-            existing_hrefs = get_existing_hrefs(package_simple_path)
-            existing_hrefs = [] if existing_hrefs is None else existing_hrefs
+            hrefs = get_existing_hrefs(package_simple_path)
+            existing_hrefs = [] if hrefs is None else hrefs
         # Download JSON meta
         file_url = urljoin(self.upstream, f"/json/{package_name}")
         success, resp = download(
@@ -781,9 +782,9 @@ def get_local_serial(package_meta_path: Path) -> Optional[int]:
 def sync_shared_args(func):
     shared_options = [
         click.option(
-            "--sync-packages",
-            is_flag=True,
-            help="Sync packages instead of just indexes",
+            "--sync-packages/--no-sync-packages",
+            default=False,
+            help="Sync packages instead of just indexes, by default it's --no-sync-packages",
         ),
         click.option(
             "--shadowmire-upstream",
@@ -805,7 +806,33 @@ def sync_shared_args(func):
     return func
 
 
+def read_config(
+    ctx: click.Context, param: click.Option, filename: Optional[str]
+) -> None:
+    if filename is None:
+        return
+    with open(filename, "rb") as f:
+        data = tomllib.load(f)
+    try:
+        options = dict(data["options"])
+    except KeyError:
+        options = {}
+    ctx.default_map = {
+        "sync": options,
+        "verify": options,
+        "do-update": options,
+        "do-remove": options,
+    }
+
+
 @click.group()
+@click.option(
+    "--config",
+    type=click.Path(dir_okay=False),
+    help="Read option defaults from specified TOML file",
+    callback=read_config,
+    expose_value=False,
+)
 @click.pass_context
 def cli(ctx: click.Context) -> None:
     log_level = logging.DEBUG if os.environ.get("DEBUG") else logging.INFO
@@ -869,7 +896,7 @@ def sync(
     plan = syncer.determine_sync_plan(local, excludes)
     # save plan for debugging
     with overwrite(basedir / "plan.json") as f:
-        json.dump(plan, f, default=vars)
+        json.dump(plan, f, default=vars, indent=2)
     syncer.do_sync_plan(plan, prerelease_excludes)
     syncer.finalize()
 
@@ -922,8 +949,10 @@ def verify(
     for package_name in plan.remove:
         # We only take the plan.remove part here
         syncer.do_remove(package_name)
-    
-    logger.info("make sure all local indexes are valid, and (if --sync-packages) have valid local package files")
+
+    logger.info(
+        "make sure all local indexes are valid, and (if --sync-packages) have valid local package files"
+    )
     syncer.check_and_update(list(local_names))
     syncer.finalize()
 

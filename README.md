@@ -2,6 +2,8 @@
 
 Shadowmire syncs PyPI (or plain HTTP(S) PyPI mirrors using Shadowmire) with a lightweight and easy approach.
 
+Requires Python 3.11+.
+
 ## Docs
 
 ### Background
@@ -88,6 +90,12 @@ Verify command could be used if you believe that something is wrong (inconsisten
 ```
 
 Verify command accepts same arguments as sync.
+
+If you don't like appending a long argument list, you could use `--config` ([example](./config.example.toml)):
+
+```shell
+./shadowmire.py --config config.toml sync
+```
 
 Also, if you need debugging, you could use `do-update` and `do-remove` command to operate on a single package.
 
