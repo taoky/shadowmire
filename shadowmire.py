@@ -160,7 +160,7 @@ def remove_dir_with_files(directory: Path) -> None:
     logger.info("Removed dir %s", directory)
 
 
-def get_packages_from_index_html(html_path: Path) -> list[str]:
+def get_package_urls_from_index_html(html_path: Path) -> list[str]:
     """
     Get all <a> href (fragments removed) from given simple/<package>/index.html contents
     """
@@ -191,7 +191,7 @@ def get_packages_from_index_html(html_path: Path) -> list[str]:
     return ret
 
 
-def get_packages_from_index_json(json_path: Path) -> list[str]:
+def get_package_urls_from_index_json(json_path: Path) -> list[str]:
     """
     Get all urls from given simple/<package>/index.v1_json contents
     """
@@ -199,6 +199,16 @@ def get_packages_from_index_json(json_path: Path) -> list[str]:
         contents_dict = json.load(f)
     urls = [i["url"] for i in contents_dict["files"]]
     return urls
+
+
+def get_package_urls_size_from_index_json(json_path: Path) -> list[tuple[str, int]]:
+    """
+    Get all urls and size from given simple/<package>/index.v1_json contents
+    """
+    with open(json_path) as f:
+        contents_dict = json.load(f)
+    ret = [(i["url"], i["size"]) for i in contents_dict["files"]]
+    return ret
 
 
 def get_existing_hrefs(package_simple_path: Path) -> Optional[list[str]]:
@@ -213,9 +223,9 @@ def get_existing_hrefs(package_simple_path: Path) -> Optional[list[str]]:
     json_file = package_simple_path / "index.v1_json"
     html_file = package_simple_path / "index.html"
     if json_file.exists():
-        return get_packages_from_index_json(json_file)
+        return get_package_urls_from_index_json(json_file)
     if html_file.exists():
-        return get_packages_from_index_html(html_file)
+        return get_package_urls_from_index_html(html_file)
     return None
 
 
@@ -449,7 +459,10 @@ class SyncBase:
         raise NotImplementedError
 
     def check_and_update(
-        self, package_names: list[str], prerelease_excludes: list[re.Pattern[str]]
+        self,
+        package_names: list[str],
+        prerelease_excludes: list[re.Pattern[str]],
+        compare_size: bool,
     ) -> None:
         to_update = []
         for package_name in tqdm(package_names, desc="Checking consistency"):
@@ -468,24 +481,39 @@ class SyncBase:
                 )
                 to_update.append(package_name)
                 continue
-            hrefs1 = get_packages_from_index_html(html_simple)
-            hrefs2 = get_packages_from_index_json(json_simple)
-            if hrefs1 is None or hrefs2 is None or hrefs1 != hrefs2:
+            hrefs_html = get_package_urls_from_index_html(html_simple)
+            hrefsize_json = get_package_urls_size_from_index_json(json_simple)
+            if (
+                hrefs_html is None
+                or hrefsize_json is None
+                or hrefs_html != [i[0] for i in hrefsize_json]
+            ):
                 # something unexpected happens...
                 logger.info("add %s as its indexes are not consistent", package_name)
                 to_update.append(package_name)
                 continue
-            hrefs = hrefs1
+
             # OK, check if all hrefs have corresponding files
             if self.sync_packages:
                 should_update = False
-                for href in hrefs:
+                for href, size in hrefsize_json:
                     dest = (package_simple_path / href).resolve()
                     if not dest.exists():
+                        logger.info("add %s as it's missing packages", package_name)
                         should_update = True
                         break
+                    if compare_size:
+                        dest_size = dest.stat().st_size
+                        if dest_size != size:
+                            logger.info(
+                                "add %s as its local size %s != %s",
+                                package_name,
+                                dest_size,
+                                size,
+                            )
+                            should_update = True
+                            break
                 if should_update:
-                    logger.info("add %s as it's missing packages", package_name)
                     to_update.append(package_name)
         self.parallel_update(to_update, prerelease_excludes)
 
@@ -975,8 +1003,11 @@ def genlocal(ctx: click.Context) -> None:
 )
 @click.pass_context
 @sync_shared_args
+@click.option("--no-remove-not-in-local", is_flag=True, help="Skip step 1")
 @click.option(
-    "--no-remove-not-in-local", is_flag=True, help="Skip step 1"
+    "--compare-size",
+    is_flag=True,
+    help="Instead of just check if it exists, also compare local package size when possible, to decide if local package file is valid",
 )
 def verify(
     ctx: click.Context,
@@ -985,6 +1016,7 @@ def verify(
     exclude: tuple[str],
     prerelease_exclude: tuple[str],
     no_remove_not_in_local: bool,
+    compare_size: bool,
 ) -> None:
     basedir: Path = ctx.obj["basedir"]
     local_db: LocalVersionKV = ctx.obj["local_db"]
@@ -1011,7 +1043,7 @@ def verify(
     logger.info(
         "make sure all local indexes are valid, and (if --sync-packages) have valid local package files"
     )
-    syncer.check_and_update(list(local_names), prerelease_excludes)
+    syncer.check_and_update(list(local_names), prerelease_excludes, compare_size)
     syncer.finalize()
 
     logger.info("delete unreferenced files in `packages` folder")
