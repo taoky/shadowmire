@@ -613,6 +613,12 @@ def download(
     return True, resp
 
 
+def filter_release_from_meta(meta: dict, patterns: list[re.Pattern[str]]) -> None:
+    for release in list(meta["releases"].keys()):
+        if match_patterns(release, PRERELEASE_PATTERNS):
+            del meta["releases"][release]
+
+
 class SyncPyPI(SyncBase):
     def __init__(
         self, basedir: Path, local_db: LocalVersionKV, sync_packages: bool = False
@@ -655,9 +661,7 @@ class SyncPyPI(SyncBase):
 
         # filter prerelease, if necessary
         if match_patterns(package_name, prerelease_excludes):
-            for release in list(meta["releases"].keys()):
-                if match_patterns(release, PRERELEASE_PATTERNS):
-                    del meta["releases"][release]
+            filter_release_from_meta(meta, PRERELEASE_PATTERNS)
 
         if self.sync_packages:
             # sync packages first, then sync index
@@ -726,11 +730,6 @@ class SyncPlainHTTP(SyncBase):
         prerelease_excludes: list[re.Pattern[str]],
         use_db: bool = True,
     ) -> Optional[int]:
-        if prerelease_excludes:
-            # TODO
-            logger.warning(
-                "prerelease_excludes is currently ignored in SyncPlainHTTP mode."
-            )
         logger.info("updating %s", package_name)
         package_simple_path = self.simple_dir / package_name
         package_simple_path.mkdir(exist_ok=True)
@@ -751,6 +750,9 @@ class SyncPlainHTTP(SyncBase):
             return None
         assert resp
         meta = resp.json()
+        # filter prerelease, if necessary
+        if match_patterns(package_name, prerelease_excludes):
+            filter_release_from_meta(meta, PRERELEASE_PATTERNS)
 
         if self.sync_packages:
             release_files = PyPI.get_release_files_from_meta(meta)
