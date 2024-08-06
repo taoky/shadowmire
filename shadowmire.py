@@ -249,6 +249,7 @@ class PyPI:
         self.session = create_requests_session()
 
     def list_packages_with_serial(self) -> dict[str, int]:
+        logger.info("Calling list_packages_with_serial() RPC, this requires some time...")
         return self.xmlrpc_client.list_packages_with_serial()  # type: ignore
 
     def get_package_metadata(self, package_name: str) -> dict:
@@ -444,7 +445,9 @@ class SyncBase:
     def fetch_remote_versions(self) -> dict[str, int]:
         raise NotImplementedError
 
-    def check_and_update(self, package_names: list[str]) -> None:
+    def check_and_update(
+        self, package_names: list[str], prerelease_excludes: list[re.Pattern[str]]
+    ) -> None:
         to_update = []
         for package_name in tqdm(package_names, desc="Checking consistency"):
             package_jsonmeta_path = self.jsonmeta_dir / package_name
@@ -481,7 +484,7 @@ class SyncBase:
                 if should_update:
                     logger.info("add %s as it's missing packages", package_name)
                     to_update.append(package_name)
-        self.parallel_update(to_update, [])
+        self.parallel_update(to_update, prerelease_excludes)
 
     def parallel_update(
         self, package_names: list, prerelease_excludes: list[re.Pattern[str]]
@@ -613,9 +616,11 @@ def download(
     return True, resp
 
 
-def filter_release_from_meta(meta: dict, patterns: list[re.Pattern[str]]) -> None:
+def filter_release_from_meta(
+    meta: dict, patterns: list[re.Pattern[str]] | tuple[re.Pattern[str], ...]
+) -> None:
     for release in list(meta["releases"].keys()):
-        if match_patterns(release, PRERELEASE_PATTERNS):
+        if match_patterns(release, patterns):
             del meta["releases"][release]
 
 
@@ -966,7 +971,7 @@ def verify(
     basedir: Path = ctx.obj["basedir"]
     local_db: LocalVersionKV = ctx.obj["local_db"]
     excludes = exclude_to_excludes(exclude)
-    # prerelease_excludes = exclude_to_excludes(prerelease_exclude)
+    prerelease_excludes = exclude_to_excludes(prerelease_exclude)
     syncer = get_syncer(basedir, local_db, sync_packages, shadowmire_upstream)
 
     logger.info("remove packages NOT in local db")
@@ -985,7 +990,7 @@ def verify(
     logger.info(
         "make sure all local indexes are valid, and (if --sync-packages) have valid local package files"
     )
-    syncer.check_and_update(list(local_names))
+    syncer.check_and_update(list(local_names), prerelease_excludes)
     syncer.finalize()
 
     logger.info("delete unreferenced files in `packages` folder")

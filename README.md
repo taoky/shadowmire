@@ -82,7 +82,7 @@ Verify command could be used if you believe that something is wrong (inconsisten
 2. remove packages NOT in remote (with consideration of `--exclude`)
 3. make sure all local indexes are valid, and (if --sync-packages) have valid local package files
 
-   (`--prerelease-exclude` would be ignored)
+   (`--prerelease-exclude` would used only for packages that requires updating)
 4. delete unreferenced files in `packages` folder
 
 ```shell
