@@ -156,7 +156,7 @@ def remove_dir_with_files(directory: Path) -> None:
     logger.info("Removed dir %s", directory)
 
 
-def get_packages_from_index_html(contents: str) -> list[str]:
+def get_packages_from_index_html(html_path: Path) -> list[str]:
     """
     Get all <a> href (fragments removed) from given simple/<package>/index.html contents
     """
@@ -175,7 +175,8 @@ def get_packages_from_index_html(contents: str) -> list[str]:
                         self.hrefs.append(attr[1])
 
     p = ATagHTMLParser()
-    p.feed(contents)
+    with open(html_path) as f:
+        p.feed(f.read())
 
     ret = []
     for href in p.hrefs:
@@ -186,19 +187,32 @@ def get_packages_from_index_html(contents: str) -> list[str]:
     return ret
 
 
+def get_packages_from_index_json(json_path: Path) -> list[str]:
+    """
+    Get all urls from given simple/<package>/index.v1_json contents
+    """
+    with open(json_path) as f:
+        contents_dict = json.load(f)
+    urls = [i["url"] for i in contents_dict["files"]]
+    return urls
+
+
 def get_existing_hrefs(package_simple_path: Path) -> Optional[list[str]]:
     """
     There exists packages that have no release files, so when it encounters errors it would return None,
     otherwise empty list or list with hrefs.
+
+    Priority: index.v1_json -> index.html
     """
-    existing_hrefs = []
-    try:
-        with open(package_simple_path / "index.html") as f:
-            contents = f.read()
-        existing_hrefs = get_packages_from_index_html(contents)
-    except FileNotFoundError:
+    if not package_simple_path.exists():
         return None
-    return existing_hrefs
+    json_file = package_simple_path / "index.v1_json"
+    html_file = package_simple_path / "index.html"
+    if json_file.exists():
+        return get_packages_from_index_json(json_file)
+    if html_file.exists():
+        return get_packages_from_index_html(html_file)
+    return None
 
 
 class CustomXMLRPCTransport(xmlrpc.client.Transport):
@@ -434,14 +448,27 @@ class SyncBase:
         for package_name in tqdm(package_names, desc="Checking consistency"):
             package_jsonmeta_path = self.jsonmeta_dir / package_name
             if not package_jsonmeta_path.exists():
+                logger.info("add %s as it does not have json API file", package_name)
                 to_update.append(package_name)
                 continue
             package_simple_path = self.simple_dir / package_name
-            hrefs = get_existing_hrefs(package_simple_path)
-            if hrefs is None:
-                # something unexpected happens...
+            html_simple = package_simple_path / "index.html"
+            json_simple = package_simple_path / "index.v1_json"
+            if not (html_simple.exists() and json_simple.exists()):
+                logger.info(
+                    "add %s as it does not have index.html or index.v1_json",
+                    package_name,
+                )
                 to_update.append(package_name)
                 continue
+            hrefs1 = get_packages_from_index_html(html_simple)
+            hrefs2 = get_packages_from_index_json(json_simple)
+            if hrefs1 is None or hrefs2 is None or hrefs1 != hrefs2:
+                # something unexpected happens...
+                logger.info("add %s as its indexes are not consistent", package_name)
+                to_update.append(package_name)
+                continue
+            hrefs = hrefs1
             # OK, check if all hrefs have corresponding files
             if self.sync_packages:
                 should_update = False
@@ -451,6 +478,7 @@ class SyncBase:
                         should_update = True
                         break
                 if should_update:
+                    logger.info("add %s as it's missing packages", package_name)
                     to_update.append(package_name)
         self.parallel_update(to_update, [])
 
@@ -507,15 +535,13 @@ class SyncBase:
             # To make this less noisy...
             logger.info("removing %s", package_name)
         package_simple_dir = self.simple_dir / package_name
-        index_html = package_simple_dir / "index.html"
-        if index_html.exists():
-            with open(index_html) as f:
-                packages_to_remove = get_packages_from_index_html(f.read())
-                paths_to_remove = [package_simple_dir / p for p in packages_to_remove]
-                for p in paths_to_remove:
-                    if p.exists():
-                        p.unlink()
-                        logger.info("Removed file %s", p)
+        packages_to_remove = get_existing_hrefs(package_simple_dir)
+        if packages_to_remove:
+            paths_to_remove = [package_simple_dir / p for p in packages_to_remove]
+            for p in paths_to_remove:
+                if p.exists():
+                    p.unlink()
+                    logger.info("Removed file %s", p)
         remove_dir_with_files(package_simple_dir)
         metajson_path = self.jsonmeta_dir / package_name
         metajson_path.unlink(missing_ok=True)
@@ -986,6 +1012,8 @@ def do_update(
     basedir: Path = ctx.obj["basedir"]
     local_db: LocalVersionKV = ctx.obj["local_db"]
     excludes = exclude_to_excludes(exclude)
+    if excludes:
+        logger.warning("--exclude is ignored in do_update()")
     prerelease_excludes = exclude_to_excludes(prerelease_exclude)
     syncer = get_syncer(basedir, local_db, sync_packages, shadowmire_upstream)
     syncer.do_update(package_name, prerelease_excludes)
@@ -1007,8 +1035,6 @@ def do_remove(
     local_db = ctx.obj["local_db"]
     if exclude or prerelease_exclude:
         logger.warning("exclusion rules are ignored in do_remove()")
-    # excludes = exclude_to_excludes(exclude)
-    # prerelease_excludes = exclude_to_excludes(prerelease_exclude)
     syncer = get_syncer(basedir, local_db, sync_packages, shadowmire_upstream)
     syncer.do_remove(package_name)
 
