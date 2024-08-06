@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import sys
-from typing import Any, Optional
+from types import FrameType
+from typing import IO, Any, Callable, Generator, Optional
 import xmlrpc.client
 from dataclasses import dataclass
 import re
@@ -47,7 +48,7 @@ class ExitProgramException(Exception):
     pass
 
 
-def exit_handler(signum, frame):
+def exit_handler(signum: int, frame: Optional[FrameType]) -> None:
     raise ExitProgramException
 
 
@@ -126,7 +127,9 @@ class LocalVersionKV:
 
 
 @contextmanager
-def overwrite(file_path: Path, mode: str = "w", tmp_suffix: str = ".tmp"):
+def overwrite(
+    file_path: Path, mode: str = "w", tmp_suffix: str = ".tmp"
+) -> Generator[IO[Any], None, None]:
     tmp_path = file_path.parent / (file_path.name + tmp_suffix)
     try:
         with open(tmp_path, mode) as tmp_file:
@@ -249,14 +252,16 @@ class PyPI:
         self.session = create_requests_session()
 
     def list_packages_with_serial(self) -> dict[str, int]:
-        logger.info("Calling list_packages_with_serial() RPC, this requires some time...")
+        logger.info(
+            "Calling list_packages_with_serial() RPC, this requires some time..."
+        )
         return self.xmlrpc_client.list_packages_with_serial()  # type: ignore
 
     def get_package_metadata(self, package_name: str) -> dict:
         req = self.session.get(urljoin(self.host, f"pypi/{package_name}/json"))
         if req.status_code == 404:
             raise PackageNotFoundError
-        return req.json()
+        return req.json()  # type: ignore
 
     @staticmethod
     def get_release_files_from_meta(package_meta: dict) -> list[dict]:
@@ -509,7 +514,9 @@ class SyncBase:
                         if serial:
                             self.local_db.set(package_name, serial)
                     except Exception as e:
-                        if e is ExitProgramException or e is KeyboardInterrupt:
+                        if isinstance(e, ExitProgramException) or isinstance(
+                            e, KeyboardInterrupt
+                        ):
                             raise
                         logger.warning(
                             "%s generated an exception", package_name, exc_info=True
@@ -810,13 +817,13 @@ def get_local_serial(package_meta_path: Path) -> Optional[int]:
         return None
     try:
         meta = json.loads(contents)
-        return meta["last_serial"]
+        return meta["last_serial"]  # type: ignore
     except Exception:
         logger.warning("cannot parse %s's JSON metadata", package_name, exc_info=True)
         return None
 
 
-def sync_shared_args(func):
+def sync_shared_args(func: Callable[..., Any]) -> Callable[..., Any]:
     shared_options = [
         click.option(
             "--sync-packages/--no-sync-packages",
