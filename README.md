@@ -89,7 +89,7 @@ Verify command could be used if you believe that something is wrong (inconsisten
 ./shadowmire.py verify --sync-packages
 ```
 
-Verify command accepts same arguments as sync.
+Verify command accepts same arguments as sync, and accepts some new arguments. Please check `./shadowmire.py verify --help` for more information.
 
 If you don't like appending a long argument list, you could use `--config` ([example](./config.example.toml)):
 

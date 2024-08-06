@@ -570,14 +570,16 @@ class SyncBase:
 
         self.parallel_update(to_update, prerelease_excludes)
 
-    def do_remove(self, package_name: str, use_db: bool = True) -> None:
+    def do_remove(
+        self, package_name: str, use_db: bool = True, remove_packages: bool = True
+    ) -> None:
         metajson_path = self.jsonmeta_dir / package_name
         if metajson_path.exists():
             # To make this less noisy...
             logger.info("removing %s", package_name)
         package_simple_dir = self.simple_dir / package_name
         packages_to_remove = get_existing_hrefs(package_simple_dir)
-        if packages_to_remove:
+        if remove_packages and packages_to_remove:
             paths_to_remove = [package_simple_dir / p for p in packages_to_remove]
             for p in paths_to_remove:
                 if p.exists():
@@ -1008,7 +1010,9 @@ def genlocal(ctx: click.Context) -> None:
 )
 @click.pass_context
 @sync_shared_args
-@click.option("--remove-not-in-local", is_flag=True, help="Do step 1 instead of skipping")
+@click.option(
+    "--remove-not-in-local", is_flag=True, help="Do step 1 instead of skipping"
+)
 @click.option(
     "--compare-size",
     is_flag=True,
@@ -1037,7 +1041,12 @@ def verify(
     for package_name in not_in_local:
         logger.debug("package %s not in local db", package_name)
         if remove_not_in_local:
-            syncer.do_remove(package_name)
+            # Old bandersnatch would download packages without normalization,
+            # in which case one package file could have multiple "packages"
+            # with different names, but normalized to the same one.
+            # So, when in verify, we always set remove_packages=False
+            # In step 4 unreferenced files would be removed, anyway.
+            syncer.do_remove(package_name, remove_packages=False)
 
     logger.info("remove packages NOT in remote")
     local = local_db.dump(skip_invalid=False)
@@ -1046,7 +1055,7 @@ def verify(
     for package_name in plan.remove:
         # We only take the plan.remove part here
         logger.debug("package %s not in remote index", package_name)
-        syncer.do_remove(package_name)
+        syncer.do_remove(package_name, remove_packages=False)
 
     logger.info(
         "make sure all local indexes are valid, and (if --sync-packages) have valid local package files"
