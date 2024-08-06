@@ -517,6 +517,7 @@ class SyncBase:
                             break
                 if should_update:
                     to_update.append(package_name)
+        logger.info("%s packages to update in check_and_update()", len(to_update))
         self.parallel_update(to_update, prerelease_excludes)
 
     def parallel_update(
@@ -1031,7 +1032,9 @@ def verify(
     logger.info("remove packages NOT in local db")
     local_names = set(local_db.keys())
     simple_dirs = set([i.name for i in (basedir / "simple").iterdir() if i.is_dir()])
-    for package_name in simple_dirs - local_names:
+    not_in_local = simple_dirs - local_names
+    logger.info("%s packages NOT in local db", len(not_in_local))
+    for package_name in not_in_local:
         logger.debug("package %s not in local db", package_name)
         if not no_remove_not_in_local:
             syncer.do_remove(package_name)
@@ -1039,6 +1042,7 @@ def verify(
     logger.info("remove packages NOT in remote")
     local = local_db.dump(skip_invalid=False)
     plan = syncer.determine_sync_plan(local, excludes)
+    logger.info("%s packages NOT in remote", len(plan.remove))
     for package_name in plan.remove:
         # We only take the plan.remove part here
         logger.debug("package %s not in remote index", package_name)
