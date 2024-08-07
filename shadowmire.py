@@ -576,10 +576,10 @@ class SyncBase:
         self, package_name: str, use_db: bool = True, remove_packages: bool = True
     ) -> None:
         metajson_path = self.jsonmeta_dir / package_name
-        if metajson_path.exists():
+        package_simple_dir = self.simple_dir / package_name
+        if metajson_path.exists() or package_simple_dir.exists():
             # To make this less noisy...
             logger.info("removing %s", package_name)
-        package_simple_dir = self.simple_dir / package_name
         packages_to_remove = get_existing_hrefs(package_simple_dir)
         if remove_packages and packages_to_remove:
             paths_to_remove = [package_simple_dir / p for p in packages_to_remove]
@@ -1067,13 +1067,13 @@ def verify(
 
     logger.info("delete unreferenced files in `packages` folder")
     ref_set = set()
-    for sname in simple_dirs:
+    for sname in tqdm(simple_dirs, desc="Iterating simple/ directory"):
         sd = basedir / "simple" / sname
         hrefs = get_existing_hrefs(sd)
         hrefs = [] if hrefs is None else hrefs
         for i in hrefs:
             ref_set.add(str((sd / i).resolve()))
-    for file in (basedir / "packages").glob("*/*/*/*"):
+    for file in tqdm((basedir / "packages").glob("*/*/*/*"), desc="Iterating packages/*/*/*/*"):
         file = file.resolve()
         if str(file) not in ref_set:
             logger.info("removing unreferenced %s", file)
