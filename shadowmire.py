@@ -728,13 +728,15 @@ class SyncPyPI(SyncBase):
             should_remove = list(set(existing_hrefs) - set(remote_hrefs))
             for p in should_remove:
                 logger.info("removing file %s (if exists)", p)
-                package_path = (package_simple_path / p).resolve()
+                package_path = Path(normpath(package_simple_path / p))
                 package_path.unlink(missing_ok=True)
             for i in release_files:
                 url = i["url"]
-                dest = (
-                    package_simple_path / self.pypi.file_url_to_local_url(i["url"])
-                ).resolve()
+                dest = Path(
+                    normpath(
+                        package_simple_path / self.pypi.file_url_to_local_url(i["url"])
+                    )
+                )
                 logger.info("downloading file %s -> %s", url, dest)
                 if dest.exists():
                     continue
@@ -817,12 +819,12 @@ class SyncPlainHTTP(SyncBase):
             should_remove = list(set(existing_hrefs) - set(remote_hrefs))
             for p in should_remove:
                 logger.info("removing file %s (if exists)", p)
-                package_path = (package_simple_path / p).resolve()
+                package_path = Path(normpath(package_simple_path / p))
                 package_path.unlink(missing_ok=True)
             package_simple_url = urljoin(self.upstream, f"/simple/{package_name}/")
             for href in remote_hrefs:
                 url = urljoin(package_simple_url, href)
-                dest = (package_simple_path / href).resolve()
+                dest = Path(normpath(package_simple_path / href))
                 logger.info("downloading file %s -> %s", url, dest)
                 if dest.exists():
                     continue
