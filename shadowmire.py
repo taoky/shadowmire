@@ -12,6 +12,9 @@ from html.parser import HTMLParser
 import logging
 import html
 import os
+from os.path import (
+    normpath,
+)  # fast path computation, instead of accessing real files like pathlib
 from contextlib import contextmanager
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -931,7 +934,8 @@ def cli(ctx: click.Context) -> None:
         )
         logger.warning("Don't blame me if you were banned!")
 
-    basedir = Path(os.environ.get("REPO", "."))
+    # Make sure basedir is absolute
+    basedir = Path(os.environ.get("REPO", ".")).resolve()
     local_db = LocalVersionKV(basedir / "local.db", basedir / "local.json")
 
     ctx.obj["basedir"] = basedir
@@ -1053,7 +1057,10 @@ def verify(
     logger.info("remove packages NOT in remote")
     local = local_db.dump(skip_invalid=False)
     plan = syncer.determine_sync_plan(local, excludes)
-    logger.info("%s packages NOT in remote -- this might contain packages that also do not exist locally", len(plan.remove))
+    logger.info(
+        "%s packages NOT in remote -- this might contain packages that also do not exist locally",
+        len(plan.remove),
+    )
     for package_name in plan.remove:
         # We only take the plan.remove part here
         logger.debug("package %s not in remote index", package_name)
@@ -1072,9 +1079,17 @@ def verify(
         hrefs = get_existing_hrefs(sd)
         hrefs = [] if hrefs is None else hrefs
         for i in hrefs:
-            ref_set.add(str((sd / i).resolve()))
-    for file in tqdm((basedir / "packages").glob("*/*/*/*"), desc="Iterating packages/*/*/*/*"):
-        file = file.resolve()
+            # use normpath, which is much faster than pathlib resolve(), as it does not need to access fs
+            # we could make sure no symlinks could affect this here
+            np = normpath(sd / i)
+            logger.debug("add to ref_set: %s", np)
+            ref_set.add(np)
+    for file in tqdm(
+        (basedir / "packages").glob("*/*/*/*"), desc="Iterating packages/*/*/*/*"
+    ):
+        # basedir is absolute, so file is also absolute
+        # just convert to str to match normpath result
+        logger.debug("find file %s", file)
         if str(file) not in ref_set:
             logger.info("removing unreferenced %s", file)
             file.unlink()
