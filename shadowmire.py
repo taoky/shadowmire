@@ -504,7 +504,7 @@ class SyncBase:
             if self.sync_packages:
                 should_update = False
                 for href, size in hrefsize_json:
-                    dest = (package_simple_path / href).resolve()
+                    dest = Path(normpath(package_simple_path / href))
                     if not dest.exists():
                         logger.info("add %s as it's missing packages", package_name)
                         should_update = True
@@ -1042,7 +1042,8 @@ def verify(
     logger.info("remove packages NOT in local db")
     local_names = set(local_db.keys())
     simple_dirs = set([i.name for i in (basedir / "simple").iterdir() if i.is_dir()])
-    not_in_local = simple_dirs - local_names
+    json_files = set([i.name for i in (basedir / "json").iterdir() if i.is_file()])
+    not_in_local = (simple_dirs | json_files) - local_names
     logger.info("%s packages NOT in local db", len(not_in_local))
     for package_name in not_in_local:
         logger.debug("package %s not in local db", package_name)
@@ -1065,6 +1066,9 @@ def verify(
         # We only take the plan.remove part here
         logger.debug("package %s not in remote index", package_name)
         syncer.do_remove(package_name, remove_packages=False)
+
+    # After some removal, local_names is changed.
+    local_names = set(local_db.keys())
 
     logger.info(
         "make sure all local indexes are valid, and (if --sync-packages) have valid local package files"
