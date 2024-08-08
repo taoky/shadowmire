@@ -90,7 +90,7 @@ class LocalVersionKV:
 
     def batch_set(self, d: dict[str, int]) -> None:
         cur = self.conn.cursor()
-        kvs = [(k, v) for k, v in d.items()]
+        kvs = list(d.items())
         cur.executemany(self.INSERT_SQL, kvs)
         self.conn.commit()
 
@@ -557,9 +557,7 @@ class SyncBase:
                         if serial:
                             self.local_db.set(package_name, serial)
                     except Exception as e:
-                        if isinstance(e, ExitProgramException) or isinstance(
-                            e, KeyboardInterrupt
-                        ):
+                        if isinstance(e, (ExitProgramException, KeyboardInterrupt)):
                             raise
                         logger.warning(
                             "%s generated an exception", package_name, exc_info=True
@@ -749,7 +747,7 @@ class SyncPyPI(SyncBase):
                 if dest.exists():
                     continue
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                success, resp = download(self.session, url, dest)
+                success, _resp = download(self.session, url, dest)
                 if not success:
                     logger.warning("skipping %s as it fails downloading", package_name)
                     return None
@@ -1083,8 +1081,8 @@ def verify(
 
     logger.info("remove packages NOT in local db")
     local_names = set(local_db.keys())
-    simple_dirs = set([i.name for i in (basedir / "simple").iterdir() if i.is_dir()])
-    json_files = set([i.name for i in (basedir / "json").iterdir() if i.is_file()])
+    simple_dirs = {i.name for i in (basedir / "simple").iterdir() if i.is_dir()}
+    json_files = {i.name for i in (basedir / "json").iterdir() if i.is_file()}
     not_in_local = (simple_dirs | json_files) - local_names
     logger.info("%s packages NOT in local db", len(not_in_local))
     for package_name in not_in_local:
