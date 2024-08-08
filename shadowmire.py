@@ -28,8 +28,9 @@ import click
 from tqdm import tqdm
 from requests.adapters import HTTPAdapter, Retry
 
-
-logger = logging.getLogger(__name__)
+LOG_FORMAT = "%(asctime)s %(levelname)s: %(message)s (%(filename)s:%(lineno)d)"
+logging.basicConfig(format=LOG_FORMAT)
+logger = logging.getLogger("shadowmire")
 
 
 USER_AGENT = "Shadowmire (https://github.com/taoky/shadowmire)"
