@@ -13,7 +13,7 @@ Bandersnatch is the recommended solution to sync from PyPI. However, it has thes
 - Bandersnatch does not support removing packages that have been removed from upstream, making it easier to be the target of supply chain attack.
 - The upstream must implement [XML-RPC APIs](https://warehouse.pypa.io/api-reference/xml-rpc.html#mirroring-support), which is not acceptable for most mirror sites.
 
-Shadowmire is a light solution to these issues.
+Shadowmire is a lightweight solution to these issues.
 
 ### Syncing Protocol
 
@@ -31,6 +31,8 @@ Obviously, `list_packages_with_serial()`'s alternative is the `local.json`, whic
 
 > [!IMPORTANT]
 > Shadowmire is still in experimental state. Please consider take a snapshot before using (if you're using ZFS/BtrFS), to avoid Shadowmire eating all you packages in accident.
+
+#### Synchronization
 
 If you just need to fetch all indexes (and then use a cache solution for packages):
 
@@ -67,7 +69,10 @@ And `--shadowmire-upstream`, if you don't want to sync from PyPI directly.
 ./shadowmire.py sync --shadowmire-upstream http://example.com/pypi/
 ```
 
-If you already have a pypi repo, use `genlocal` first to generate a local db:
+> [!NOTE]
+> Upstream must also use shadowmire to serve `local.json`. If not, you must specify `--shadowmire-upstream`.
+
+If you already have a PyPI repo, use `genlocal` first to generate a local db:
 
 ```shell
 ./shadowmire.py genlocal
@@ -76,20 +81,36 @@ If you already have a pypi repo, use `genlocal` first to generate a local db:
 > [!IMPORTANT]
 > You shall have file `json/<package_name>` before `genlocal`.
 
-Verify command could be used if you believe that something is wrong (inconsistent). It would:
+#### Verification
+
+`verify` command could be used if you believe that something is wrong (inconsistent). It would:
 
 1. remove packages NOT in local db (skip by default, it would only print package names without `--remove-not-in-local`)
 2. remove packages NOT in remote (with consideration of `--exclude`)
 3. make sure all local indexes are valid, and (if --sync-packages) have valid local package files
-
    (`--prerelease-exclude` would used only for packages that requires updating)
-4. delete unreferenced files in `packages` folder
+4. delete unreferenced files (i.e. blobs) in `packages` folder
 
 ```shell
 ./shadowmire.py verify --sync-packages
 ```
 
-Verify command accepts same arguments as sync, and accepts some new arguments. Please check `./shadowmire.py verify --help` for more information.
+> [!TIP]
+> users are recommended to run `verify` regularly (e.g. every half a year) to make sure everything is in order, thanks to the unpredictable nature of PyPI.
+
+`verify` command accepts same arguments as sync, and accepts some new arguments. Please check `./shadowmire.py verify --help` for more information.
+
+> [!IMPORTANT]
+> For users switching from Bandersnatch to Shadowmire, you **MUST** run the following commands (with exclusion, of course) before regular syncing:
+>
+> 1. `./shadowmire.py genlocal`: generate database from local packages.
+> 1. `./shadowmire.py verify --sync-packages --remove-not-in-local --compare-size`: remove any local packages that were missing from upstream index (normally removed from PyPI), then download any missing metadata and packages. **This step is likely to take very long time, depending on your network and disk speed.** 
+>     * Q: Why will there be packages that are in neither local db nor remote index?
+>     * A: They are packages without valid local metadata, and do not exist on PyPI anymore. These packages are typically downloaded a long time ago and removed from upstream, but they may still share some blobs with currently available packages. E.g. after name normalization of `Foo` to `foo`, they share all existings blobs, but `Foo` does not change any more.
+> 1. `./shadowmire.py genlocal`: generate local database again.
+> 1. `./shadowmire.py sync --sync-packages`: synchronize new changes after verification.
+
+### Config file
 
 If you don't like appending a long argument list, you could use `--config` ([example](./config.example.toml)):
 
