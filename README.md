@@ -70,7 +70,7 @@ And `--shadowmire-upstream`, if you don't want to sync from PyPI directly.
 ```
 
 > [!NOTE]
-> Upstream must also use shadowmire to serve `local.json`. If not, you must specify `--shadowmire-upstream`.
+> Upstream must also use shadowmire to serve `local.json`. Otherwise, you must specify `--use-pypi-index`.
 
 If you already have a PyPI repo, use `genlocal` first to generate a local db:
 
