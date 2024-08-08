@@ -35,10 +35,10 @@ Obviously, `list_packages_with_serial()`'s alternative is the `local.json`, whic
 If you just need to fetch all indexes (and then use a cache solution for packages):
 
 ```shell
-REPO=/path/to/pypi ./shadowmire.py sync
+./shadowmire.py --repo /path/to/pypi sync
 ```
 
-If `REPO` env is not set, it defaults to current working directory.
+If `--repo` argument is not set, it defaults to current working directory.
 
 If you need to download all packages, add `--sync-packages`.
 

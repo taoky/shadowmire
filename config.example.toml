@@ -1,6 +1,7 @@
 [options]
+# repo = "/example/path"
 sync_packages = true
-# shadowmire_upstream = http://example.com/pypi/web/
+# shadowmire_upstream = "http://example.com/pypi/web/"
 exclude = [
     "[a-z]"
 ]
