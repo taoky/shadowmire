@@ -101,7 +101,7 @@ Also, if you need debugging, you could use `do-update` and `do-remove` command t
 
 ## Acknowledgements
 
-This project uses some code from PyPI's official mirroring tools, [bandersnatch](https://github.com/pypa/bandersnatch).
+This project uses some code from PyPI's official mirroring tools, [bandersnatch](https://github.com/pypa/bandersnatch). It uses Academic Free License v3, and you could read its license contents [here](./LICENSE.AFL).
 
 ## Naming
 
