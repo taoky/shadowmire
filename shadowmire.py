@@ -266,11 +266,19 @@ class PyPI:
         )
         self.session = create_requests_session()
 
-    def list_packages_with_serial(self) -> dict[str, int]:
+    def list_packages_with_serial(self, do_normalize: bool = True) -> dict[str, int]:
         logger.info(
             "Calling list_packages_with_serial() RPC, this requires some time..."
         )
-        return self.xmlrpc_client.list_packages_with_serial()  # type: ignore
+        ret: dict[str, int] = self.xmlrpc_client.list_packages_with_serial()  # type: ignore
+        if do_normalize:
+            for key in list(ret.keys()):
+                normalized_key = normalize(key)
+                if normalized_key == key:
+                    continue
+                ret[normalized_key] = ret[key]
+                del ret[key]
+        return ret
 
     def get_package_metadata(self, package_name: str) -> dict:
         req = self.session.get(urljoin(self.host, f"pypi/{package_name}/json"))
@@ -470,7 +478,7 @@ class SyncBase:
         package_names: list[str],
         prerelease_excludes: list[re.Pattern[str]],
         compare_size: bool,
-    ) -> None:
+    ) -> bool:
         to_update = []
         for package_name in tqdm(package_names, desc="Checking consistency"):
             package_jsonmeta_path = self.jsonmeta_dir / package_name
@@ -523,11 +531,12 @@ class SyncBase:
                 if should_update:
                     to_update.append(package_name)
         logger.info("%s packages to update in check_and_update()", len(to_update))
-        self.parallel_update(to_update, prerelease_excludes)
+        return self.parallel_update(to_update, prerelease_excludes)
 
     def parallel_update(
         self, package_names: list, prerelease_excludes: list[re.Pattern[str]]
-    ) -> None:
+    ) -> bool:
+        success = True
         with ThreadPoolExecutor(max_workers=WORKERS) as executor:
             futures = {
                 executor.submit(
@@ -555,6 +564,7 @@ class SyncBase:
                         logger.warning(
                             "%s generated an exception", package_name, exc_info=True
                         )
+                        success = False
                     if idx % 100 == 0:
                         logger.info("dumping local db...")
                         self.local_db.dump_json()
@@ -563,17 +573,18 @@ class SyncBase:
                 for future in futures:
                     future.cancel()
                 sys.exit(1)
+        return success
 
     def do_sync_plan(
         self, plan: Plan, prerelease_excludes: list[re.Pattern[str]]
-    ) -> None:
+    ) -> bool:
         to_remove = plan.remove
         to_update = plan.update
 
         for package_name in to_remove:
             self.do_remove(package_name)
 
-        self.parallel_update(to_update, prerelease_excludes)
+        return self.parallel_update(to_update, prerelease_excludes)
 
     def do_remove(
         self, package_name: str, use_db: bool = True, remove_packages: bool = True
@@ -677,10 +688,7 @@ class SyncPyPI(SyncBase):
         super().__init__(basedir, local_db, sync_packages)
 
     def fetch_remote_versions(self) -> dict[str, int]:
-        remote_serials = self.pypi.list_packages_with_serial()
-        ret = {}
-        for key in remote_serials:
-            ret[normalize(key)] = remote_serials[key]
+        ret = self.pypi.list_packages_with_serial()
         logger.info("Remote has %s packages", len(ret))
         with overwrite(self.basedir / "remote.json") as f:
             json.dump(ret, f)
@@ -767,16 +775,26 @@ class SyncPlainHTTP(SyncBase):
         basedir: Path,
         local_db: LocalVersionKV,
         sync_packages: bool = False,
+        use_pypi_index: bool = False,
     ) -> None:
         self.upstream = upstream
         self.session = create_requests_session()
+        self.pypi: Optional[PyPI]
+        if use_pypi_index:
+            self.pypi = PyPI()
+        else:
+            self.pypi = None
         super().__init__(basedir, local_db, sync_packages)
 
     def fetch_remote_versions(self) -> dict[str, int]:
-        remote_url = urljoin(self.upstream, "local.json")
-        resp = self.session.get(remote_url)
-        resp.raise_for_status()
-        remote: dict[str, int] = resp.json()
+        remote: dict[str, int]
+        if not self.pypi:
+            remote_url = urljoin(self.upstream, "local.json")
+            resp = self.session.get(remote_url)
+            resp.raise_for_status()
+            remote = resp.json()
+        else:
+            remote = self.pypi.list_packages_with_serial()
         logger.info("Remote has %s packages", len(remote))
         with overwrite(self.basedir / "remote.json") as f:
             json.dump(remote, f)
@@ -891,6 +909,11 @@ def sync_shared_args(func: Callable[..., Any]) -> Callable[..., Any]:
             multiple=True,
             help="Package names that shall exclude prerelease. Regex.",
         ),
+        click.option(
+            "--use-pypi-index/--no-use-pypi-index",
+            default=False,
+            help="Always use pypi index metadata. It's no-op without --shadowmire-upstream. Some packages might not be downloaded successfully.",
+        ),
     ]
     for option in shared_options[::-1]:
         func = option(func)
@@ -960,6 +983,7 @@ def get_syncer(
     local_db: LocalVersionKV,
     sync_packages: bool,
     shadowmire_upstream: Optional[str],
+    use_pypi_index: bool,
 ) -> SyncBase:
     syncer: SyncBase
     if shadowmire_upstream:
@@ -968,6 +992,7 @@ def get_syncer(
             basedir=basedir,
             local_db=local_db,
             sync_packages=sync_packages,
+            use_pypi_index=use_pypi_index,
         )
     else:
         syncer = SyncPyPI(
@@ -985,19 +1010,24 @@ def sync(
     shadowmire_upstream: Optional[str],
     exclude: tuple[str],
     prerelease_exclude: tuple[str],
+    use_pypi_index: bool,
 ) -> None:
     basedir: Path = ctx.obj["basedir"]
     local_db: LocalVersionKV = ctx.obj["local_db"]
     excludes = exclude_to_excludes(exclude)
     prerelease_excludes = exclude_to_excludes(prerelease_exclude)
-    syncer = get_syncer(basedir, local_db, sync_packages, shadowmire_upstream)
+    syncer = get_syncer(
+        basedir, local_db, sync_packages, shadowmire_upstream, use_pypi_index
+    )
     local = local_db.dump(skip_invalid=False)
     plan = syncer.determine_sync_plan(local, excludes)
     # save plan for debugging
     with overwrite(basedir / "plan.json") as f:
         json.dump(plan, f, default=vars, indent=2)
-    syncer.do_sync_plan(plan, prerelease_excludes)
+    success = syncer.do_sync_plan(plan, prerelease_excludes)
     syncer.finalize()
+    if not success:
+        sys.exit(1)
 
 
 @cli.command(help="(Re)generate local db and json from json/")
@@ -1041,12 +1071,15 @@ def verify(
     prerelease_exclude: tuple[str],
     remove_not_in_local: bool,
     compare_size: bool,
+    use_pypi_index: bool,
 ) -> None:
     basedir: Path = ctx.obj["basedir"]
     local_db: LocalVersionKV = ctx.obj["local_db"]
     excludes = exclude_to_excludes(exclude)
     prerelease_excludes = exclude_to_excludes(prerelease_exclude)
-    syncer = get_syncer(basedir, local_db, sync_packages, shadowmire_upstream)
+    syncer = get_syncer(
+        basedir, local_db, sync_packages, shadowmire_upstream, use_pypi_index
+    )
 
     logger.info("remove packages NOT in local db")
     local_names = set(local_db.keys())
@@ -1082,7 +1115,9 @@ def verify(
     logger.info(
         "make sure all local indexes are valid, and (if --sync-packages) have valid local package files"
     )
-    syncer.check_and_update(list(local_names), prerelease_excludes, compare_size)
+    success = syncer.check_and_update(
+        list(local_names), prerelease_excludes, compare_size
+    )
     syncer.finalize()
 
     logger.info("delete unreferenced files in `packages` folder")
@@ -1106,6 +1141,8 @@ def verify(
         if str(file) not in ref_set:
             logger.info("removing unreferenced %s", file)
             file.unlink()
+    if not success:
+        sys.exit(1)
 
 
 @cli.command(help="Manual update given package for debugging purpose")
@@ -1118,6 +1155,7 @@ def do_update(
     shadowmire_upstream: Optional[str],
     exclude: tuple[str],
     prerelease_exclude: tuple[str],
+    use_pypi_index: bool,
     package_name: str,
 ) -> None:
     basedir: Path = ctx.obj["basedir"]
@@ -1126,7 +1164,9 @@ def do_update(
     if excludes:
         logger.warning("--exclude is ignored in do_update()")
     prerelease_excludes = exclude_to_excludes(prerelease_exclude)
-    syncer = get_syncer(basedir, local_db, sync_packages, shadowmire_upstream)
+    syncer = get_syncer(
+        basedir, local_db, sync_packages, shadowmire_upstream, use_pypi_index
+    )
     syncer.do_update(package_name, prerelease_excludes)
 
 
@@ -1140,13 +1180,16 @@ def do_remove(
     shadowmire_upstream: Optional[str],
     exclude: tuple[str],
     prerelease_exclude: tuple[str],
+    use_pypi_index: bool,
     package_name: str,
 ) -> None:
     basedir = ctx.obj["basedir"]
     local_db = ctx.obj["local_db"]
     if exclude or prerelease_exclude:
         logger.warning("exclusion rules are ignored in do_remove()")
-    syncer = get_syncer(basedir, local_db, sync_packages, shadowmire_upstream)
+    syncer = get_syncer(
+        basedir, local_db, sync_packages, shadowmire_upstream, use_pypi_index
+    )
     syncer.do_remove(package_name)
 
 

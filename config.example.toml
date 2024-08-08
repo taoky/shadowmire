@@ -2,6 +2,7 @@
 # repo = "/example/path"
 sync_packages = true
 # shadowmire_upstream = "http://example.com/pypi/web/"
+# use_pypi_index = true
 exclude = [
     "[a-z]"
 ]
