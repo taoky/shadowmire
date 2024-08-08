@@ -595,7 +595,7 @@ class SyncBase:
         package_simple_dir = self.simple_dir / package_name
         if metajson_path.exists() or package_simple_dir.exists():
             # To make this less noisy...
-            logger.info("removing %s", package_name)
+            logger.info("Removing package %s", package_name)
         packages_to_remove = get_existing_hrefs(package_simple_dir)
         if remove_packages and packages_to_remove:
             paths_to_remove = [package_simple_dir / p for p in packages_to_remove]
@@ -880,7 +880,7 @@ def get_local_serial(package_meta_path: Path) -> Optional[int]:
         with open(package_meta_path) as f:
             contents = f.read()
     except FileNotFoundError:
-        logger.warning("%s does not have index.html, skipping", package_name)
+        logger.warning("%s does not have JSON metadata, skipping", package_name)
         return None
     try:
         meta = json.loads(contents)
@@ -904,17 +904,17 @@ def sync_shared_args(func: Callable[..., Any]) -> Callable[..., Any]:
             help="Use another upstream using shadowmire instead of PyPI",
         ),
         click.option(
+            "--use-pypi-index/--no-use-pypi-index",
+            default=False,
+            help="Always use PyPI index metadata (via XMLRPC). It's no-op without --shadowmire-upstream. Some packages might not be downloaded successfully.",
+        ),
+        click.option(
             "--exclude", multiple=True, help="Remote package names to exclude. Regex."
         ),
         click.option(
             "--prerelease-exclude",
             multiple=True,
-            help="Package names that shall exclude prerelease. Regex.",
-        ),
-        click.option(
-            "--use-pypi-index/--no-use-pypi-index",
-            default=False,
-            help="Always use pypi index metadata. It's no-op without --shadowmire-upstream. Some packages might not be downloaded successfully.",
+            help="Package names of which prereleases will be excluded. Regex.",
         ),
     ]
     for option in shared_options[::-1]:
@@ -940,6 +940,8 @@ def read_config(
     if options.get("repo"):
         ctx.default_map["repo"] = options["repo"]
         del options["repo"]
+
+    logger.info("Read options from %s: %s", filename, options)
 
     ctx.default_map["sync"] = options
     ctx.default_map["verify"] = options
@@ -1028,6 +1030,9 @@ def sync(
         json.dump(plan, f, default=vars, indent=2)
     success = syncer.do_sync_plan(plan, prerelease_excludes)
     syncer.finalize()
+
+    logger.info("Synchronization finished. Success: %s", success)
+
     if not success:
         sys.exit(1)
 
@@ -1047,6 +1052,7 @@ def genlocal(ctx: click.Context) -> None:
         serial = get_local_serial(package_metapath)
         if serial:
             local[package_name] = serial
+    logger.info("%d out of {} packages have valid serial number", len(local), len(dir_items))
     local_db.nuke(commit=False)
     local_db.batch_set(local)
     local_db.dump_json()
@@ -1083,14 +1089,14 @@ def verify(
         basedir, local_db, sync_packages, shadowmire_upstream, use_pypi_index
     )
 
-    logger.info("remove packages NOT in local db")
+    logger.info("====== Step 1. Remove packages NOT in local db ======")
     local_names = set(local_db.keys())
     simple_dirs = {i.name for i in (basedir / "simple").iterdir() if i.is_dir()}
     json_files = {i.name for i in (basedir / "json").iterdir() if i.is_file()}
     not_in_local = (simple_dirs | json_files) - local_names
-    logger.info("%s packages NOT in local db", len(not_in_local))
+    logger.info("%d out of %d local packages NOT in local db", len(not_in_local), len(local_names))
     for package_name in not_in_local:
-        logger.debug("package %s not in local db", package_name)
+        logger.info("package %s not in local db", package_name)
         if remove_not_in_local:
             # Old bandersnatch would download packages without normalization,
             # in which case one package file could have multiple "packages"
@@ -1099,30 +1105,30 @@ def verify(
             # In step 4 unreferenced files would be removed, anyway.
             syncer.do_remove(package_name, remove_packages=False)
 
-    logger.info("remove packages NOT in remote")
+    logger.info("====== Step 2. Remove packages NOT in remote index ======")
     local = local_db.dump(skip_invalid=False)
     plan = syncer.determine_sync_plan(local, excludes)
     logger.info(
-        "%s packages NOT in remote -- this might contain packages that also do not exist locally",
+        "%s packages NOT in remote index -- this might contain packages that also do not exist locally",
         len(plan.remove),
     )
     for package_name in plan.remove:
         # We only take the plan.remove part here
-        logger.debug("package %s not in remote index", package_name)
+        logger.info("package %s not in remote index", package_name)
         syncer.do_remove(package_name, remove_packages=False)
 
     # After some removal, local_names is changed.
     local_names = set(local_db.keys())
 
     logger.info(
-        "make sure all local indexes are valid, and (if --sync-packages) have valid local package files"
+        "====== Step 3. Make sure all local indexes are valid, and (if --sync-packages) have valid local package files ======"
     )
     success = syncer.check_and_update(
         list(local_names), prerelease_excludes, compare_size
     )
     syncer.finalize()
 
-    logger.info("delete unreferenced files in `packages` folder")
+    logger.info("====== Step 4. Remove any unreferenced files in `packages` folder ======")
     ref_set = set()
     for sname in tqdm(simple_dirs, desc="Iterating simple/ directory"):
         sd = basedir / "simple" / sname
@@ -1141,8 +1147,11 @@ def verify(
         # just convert to str to match normpath result
         logger.debug("find file %s", file)
         if str(file) not in ref_set:
-            logger.info("removing unreferenced %s", file)
+            logger.info("removing unreferenced file %s", file)
             file.unlink()
+    
+    logger.info("Verification finished. Success: %s", success)
+
     if not success:
         sys.exit(1)
 
