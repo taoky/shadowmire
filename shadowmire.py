@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+
 import sys
 from types import FrameType
 from typing import IO, Any, Callable, Generator, Optional
@@ -21,10 +22,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import signal
 import tomllib
 from copy import deepcopy
+
 import requests
 import click
 from tqdm import tqdm
 from requests.adapters import HTTPAdapter, Retry
+
 
 logger = logging.getLogger(__name__)
 
