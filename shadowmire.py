@@ -1051,7 +1051,7 @@ def genlocal(ctx: click.Context) -> None:
         serial = get_local_serial(package_metapath)
         if serial:
             local[package_name] = serial
-    logger.info("%d out of {} packages have valid serial number", len(local), len(dir_items))
+    logger.info("%d out of %d packages have valid serial number", len(local), len(dir_items))
     local_db.nuke(commit=False)
     local_db.batch_set(local)
     local_db.dump_json()
