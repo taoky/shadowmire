@@ -871,12 +871,9 @@ class SyncPlainHTTP(SyncBase):
         # generate indexes
         self.write_meta_to_simple(package_simple_path, meta)
 
-        last_serial = get_local_serial(package_simple_path)
-        if not last_serial:
-            logger.warning("cannot get valid package serial from %s", package_name)
-        else:
-            if use_db:
-                self.local_db.set(package_name, last_serial)
+        last_serial: int = meta["last_serial"]
+        if use_db:
+            self.local_db.set(package_name, last_serial)
 
         return last_serial
 
