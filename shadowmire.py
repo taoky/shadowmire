@@ -491,14 +491,20 @@ class SyncBase:
                 continue
             package_simple_path = self.simple_dir / package_name
             html_simple = package_simple_path / "index.html"
+            htmlv1_simple = package_simple_path / "index.v1_html"
             json_simple = package_simple_path / "index.v1_json"
-            if not (html_simple.exists() and json_simple.exists()):
+            if not (
+                html_simple.exists() and json_simple.exists() and htmlv1_simple.exists()
+            ):
                 logger.info(
-                    "add %s as it does not have index.html or index.v1_json",
+                    "add %s as it does not have index.html, index.v1_html or index.v1_json",
                     package_name,
                 )
                 to_update.append(package_name)
                 continue
+            if not html_simple.is_symlink():
+                html_simple.unlink()
+                html_simple.symlink_to("index.v1_html")
             hrefs_html = get_package_urls_from_index_html(html_simple)
             hrefsize_json = get_package_urls_size_from_index_json(json_simple)
             if (
