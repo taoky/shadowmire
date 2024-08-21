@@ -36,6 +36,8 @@ USER_AGENT = "Shadowmire (https://github.com/taoky/shadowmire)"
 
 # Note that it's suggested to use only 3 workers for PyPI.
 WORKERS = int(os.environ.get("SHADOWMIRE_WORKERS", "3"))
+# A safety net -- to avoid upstream issues casuing too many packages removed when determinating sync plan.
+MAX_DELETION = int(os.environ.get("SHADOWMIRE_MAX_DELETION", "50000"))
 
 # https://github.com/pypa/bandersnatch/blob/a05af547f8d1958217ef0dc0028890b1839e6116/src/bandersnatch_filter_plugins/prerelease_name.py#L18C1-L23C6
 PRERELEASE_PATTERNS = (
@@ -459,6 +461,21 @@ class SyncBase:
         for i in local_keys - remote_keys:
             to_remove.append(i)
             local_keys.remove(i)
+        # There are always some packages in PyPI's list_packages_with_serial() but actually not there
+        # Don't count them when comparing len(to_remove) with MAX_DELETION
+        if len(to_remove) > MAX_DELETION:
+            logger.error(
+                "Too many packages to remove (%d > %d)", len(to_remove), MAX_DELETION
+            )
+            logger.info("Some packages that would be removed:")
+            for p in to_remove[:100]:
+                logger.info("- %s", p)
+            for p in to_remove[100:]:
+                logger.debug("- %s", p)
+            logger.error(
+                "Use SHADOWMIRE_MAX_DELETION env to adjust the threshold if you really want to proceed"
+            )
+            sys.exit(2)
         for i in remote_keys - local_keys:
             to_update.append(i)
         for i in local_keys:
