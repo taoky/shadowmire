@@ -124,6 +124,8 @@ Also, if you need debugging, you could use `do-update` and `do-remove` command t
 
 This project uses some code from PyPI's official mirroring tools, [bandersnatch](https://github.com/pypa/bandersnatch). It uses Academic Free License v3, and you could read its license contents [here](./LICENSE.AFL).
 
+Also special thanks to TUNA for testing shadowmire (it's also available in [tunasync-scripts](https://github.com/tuna/tunasync-scripts/)).
+
 ## Naming
 
 Suggested by LLM.
