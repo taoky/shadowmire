@@ -560,7 +560,7 @@ class SyncBase:
         return self.parallel_update(to_update, prerelease_excludes)
 
     def parallel_update(
-        self, package_names: list, prerelease_excludes: list[re.Pattern[str]]
+        self, package_names: list[str], prerelease_excludes: list[re.Pattern[str]]
     ) -> bool:
         success = True
         with ThreadPoolExecutor(max_workers=WORKERS) as executor:
