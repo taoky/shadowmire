@@ -246,15 +246,15 @@ def get_existing_hrefs(package_simple_path: Path) -> Optional[list[str]]:
 
     Priority: index.v1_json -> index.html
     """
-    if not package_simple_path.exists():
-        return None
     json_file = package_simple_path / "index.v1_json"
     html_file = package_simple_path / "index.html"
-    if json_file.exists():
+    try:
         return get_package_urls_from_index_json(json_file)
-    if html_file.exists():
-        return get_package_urls_from_index_html(html_file)
-    return None
+    except FileNotFoundError:
+        try:
+            return get_package_urls_from_index_html(html_file)
+        except FileNotFoundError:
+            return None
 
 
 class CustomXMLRPCTransport(xmlrpc.client.Transport):
