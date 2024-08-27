@@ -556,12 +556,14 @@ class SyncBase:
                 should_update = False
                 for href, size in hrefsize_json:
                     dest = Path(normpath(package_simple_path / href))
-                    if not dest.exists():
+                    try:
+                        dest_stat = dest.stat()
+                    except FileNotFoundError:
                         logger.info("add %s as it's missing packages", package_name)
                         should_update = True
                         break
                     if compare_size and size != -1:
-                        dest_size = dest.stat().st_size
+                        dest_size = dest_stat.st_size
                         if dest_size != size:
                             logger.info(
                                 "add %s as its local size %s != %s",
