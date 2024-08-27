@@ -2,7 +2,7 @@
 
 import sys
 from types import FrameType
-from typing import IO, Any, Callable, Generator, Optional
+from typing import IO, Any, Callable, Generator, Literal, Optional
 import xmlrpc.client
 from dataclasses import dataclass
 import re
@@ -166,6 +166,22 @@ def remove_dir_with_files(directory: Path) -> None:
         item.unlink()
     directory.rmdir()
     logger.info("Removed dir %s", directory)
+
+
+def fast_iterdir(
+    directory: Path, filter_type: Literal["dir", "file"]
+) -> Generator[os.DirEntry[str], Any, None]:
+    """
+    iterdir() in pathlib would ignore file type information from getdents64(),
+    which is not acceptable when you have millions of files in one directory,
+    and you need to filter out all files/directories.
+    """
+    assert filter_type in ["dir", "file"]
+    for item in os.scandir(directory):
+        if filter_type == "dir" and item.is_dir():
+            yield item
+        elif filter_type == "file" and item.is_file():
+            yield item
 
 
 def get_package_urls_from_index_html(html_path: Path) -> list[str]:
@@ -1069,11 +1085,11 @@ def genlocal(ctx: click.Context) -> None:
     local = {}
     json_dir = basedir / "json"
     logger.info("Iterating all items under %s", json_dir)
-    dir_items = [d for d in json_dir.iterdir() if d.is_file()]
+    dir_items = [d for d in fast_iterdir(json_dir, "file")]
     logger.info("Detected %s packages in %s in total", len(dir_items), json_dir)
     for package_metapath in tqdm(dir_items, desc="Reading packages from json/"):
         package_name = package_metapath.name
-        serial = get_local_serial(package_metapath)
+        serial = get_local_serial(Path(package_metapath.path))
         if serial:
             local[package_name] = serial
     logger.info(
@@ -1117,8 +1133,8 @@ def verify(
 
     logger.info("====== Step 1. Remove packages NOT in local db ======")
     local_names = set(local_db.keys())
-    simple_dirs = {i.name for i in (basedir / "simple").iterdir() if i.is_dir()}
-    json_files = {i.name for i in (basedir / "json").iterdir() if i.is_file()}
+    simple_dirs = {i.name for i in fast_iterdir((basedir / "simple"), "dir")}
+    json_files = {i.name for i in fast_iterdir((basedir / "json"), "file")}
     not_in_local = (simple_dirs | json_files) - local_names
     logger.info(
         "%d out of %d local packages NOT in local db",
