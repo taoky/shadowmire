@@ -2,7 +2,7 @@
 
 import sys
 from types import FrameType
-from typing import IO, Any, Callable, Generator, Literal, Optional
+from typing import IO, Any, Callable, Generator, Literal, NoReturn, Optional
 import xmlrpc.client
 from dataclasses import dataclass
 import re
@@ -18,7 +18,7 @@ from os.path import (
 )  # fast path computation, instead of accessing real files like pathlib
 from contextlib import contextmanager
 import sqlite3
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 import signal
 import tomllib
 from copy import deepcopy
@@ -63,6 +63,13 @@ def exit_handler(signum: int, frame: Optional[FrameType]) -> None:
 
 
 signal.signal(signal.SIGTERM, exit_handler)
+
+
+def exit_with_futures(futures: dict[Future, Any]) -> NoReturn:
+    logger.info("Exiting...")
+    for future in futures:
+        future.cancel()
+    sys.exit(1)
 
 
 class LocalVersionKV:
@@ -593,10 +600,7 @@ class SyncBase:
                         )
                         raise
             except:
-                logger.info("Get an exception, exiting...")
-                for future in futures:
-                    future.cancel()
-                sys.exit(1)
+                exit_with_futures(futures)
 
         logger.info("%s packages to update in check_and_update()", len(to_update))
         return self.parallel_update(to_update, prerelease_excludes)
@@ -635,10 +639,7 @@ class SyncBase:
                         logger.info("dumping local db...")
                         self.local_db.dump_json()
             except (ExitProgramException, KeyboardInterrupt):
-                logger.info("Get ExitProgramException or KeyboardInterrupt, exiting...")
-                for future in futures:
-                    future.cancel()
-                sys.exit(1)
+                exit_with_futures(futures)
         return success
 
     def do_sync_plan(
@@ -1240,11 +1241,7 @@ def verify(
                     logger.warning("%s generated an exception", sname, exc_info=True)
                     success = False
         except (ExitProgramException, KeyboardInterrupt):
-            # TODO: dup code in threading exception handler
-            logger.info("Get ExitProgramException or KeyboardInterrupt, exiting...")
-            for future in futures:
-                future.cancel()
-            sys.exit(1)
+            exit_with_futures(futures)
 
         # Part 2: iterate packages
         def unlink_not_in_set(first_dirname: str, position: int) -> None:
@@ -1275,10 +1272,7 @@ def verify(
                     logger.warning("%s generated an exception", sname, exc_info=True)
                     success = False
         except (ExitProgramException, KeyboardInterrupt):
-            logger.info("Get ExitProgramException or KeyboardInterrupt, exiting...")
-            for future in futures:
-                future.cancel()
-            sys.exit(1)
+            exit_with_futures(futures)
 
     logger.info("Verification finished. Success: %s", success)
 
