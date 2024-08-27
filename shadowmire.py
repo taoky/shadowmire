@@ -513,12 +513,13 @@ class SyncBase:
         self,
         package_names: list[str],
         prerelease_excludes: list[re.Pattern[str]],
+        json_files: set[str],
         compare_size: bool,
     ) -> bool:
         to_update = []
         for package_name in tqdm(package_names, desc="Checking consistency"):
-            package_jsonmeta_path = self.jsonmeta_dir / package_name
-            if not package_jsonmeta_path.exists():
+            if package_name not in json_files:
+                # save a newfstatat() when name already in json_files
                 logger.info("add %s as it does not have json API file", package_name)
                 to_update.append(package_name)
                 continue
@@ -526,20 +527,20 @@ class SyncBase:
             html_simple = package_simple_path / "index.html"
             htmlv1_simple = package_simple_path / "index.v1_html"
             json_simple = package_simple_path / "index.v1_json"
-            if not (
-                html_simple.exists() and json_simple.exists() and htmlv1_simple.exists()
-            ):
+            try:
+                # always create index.html symlink, if not exists or not a symlink
+                if not html_simple.is_symlink():
+                    html_simple.unlink(missing_ok=True)
+                    html_simple.symlink_to("index.v1_html")
+                hrefs_html = get_package_urls_from_index_html(htmlv1_simple)
+                hrefsize_json = get_package_urls_size_from_index_json(json_simple)
+            except FileNotFoundError:
                 logger.info(
-                    "add %s as it does not have index.html, index.v1_html or index.v1_json",
+                    "add %s as it does not have index.v1_html or index.v1_json",
                     package_name,
                 )
                 to_update.append(package_name)
                 continue
-            if not html_simple.is_symlink():
-                html_simple.unlink()
-                html_simple.symlink_to("index.v1_html")
-            hrefs_html = get_package_urls_from_index_html(html_simple)
-            hrefsize_json = get_package_urls_size_from_index_json(json_simple)
             if (
                 hrefs_html is None
                 or hrefsize_json is None
@@ -1170,7 +1171,7 @@ def verify(
         "====== Step 3. Make sure all local indexes are valid, and (if --sync-packages) have valid local package files ======"
     )
     success = syncer.check_and_update(
-        list(local_names), prerelease_excludes, compare_size
+        list(local_names), prerelease_excludes, json_files, compare_size
     )
     syncer.finalize()
 
