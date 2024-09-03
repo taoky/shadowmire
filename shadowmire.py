@@ -65,7 +65,7 @@ def exit_handler(signum: int, frame: Optional[FrameType]) -> None:
 signal.signal(signal.SIGTERM, exit_handler)
 
 
-def exit_with_futures(futures: dict[Future, Any]) -> NoReturn:
+def exit_with_futures(futures: dict[Future[Any], Any]) -> NoReturn:
     logger.info("Exiting...")
     for future in futures:
         future.cancel()
@@ -157,6 +157,20 @@ def overwrite(
         raise
 
 
+def fast_readall(file_path: Path) -> bytes:
+    """
+    Save some extra read(), lseek() and ioctl().
+    """
+    fd = os.open(file_path, os.O_RDONLY)
+    if fd < 0:
+        raise FileNotFoundError(file_path)
+    try:
+        contents = os.read(fd, file_path.stat().st_size)
+        return contents
+    finally:
+        os.close(fd)
+
+
 def normalize(name: str) -> str:
     """
     See https://peps.python.org/pep-0503/#normalized-names
@@ -212,8 +226,8 @@ def get_package_urls_from_index_html(html_path: Path) -> list[str]:
                         self.hrefs.append(attr[1])
 
     p = ATagHTMLParser()
-    with open(html_path) as f:
-        p.feed(f.read())
+    contents = fast_readall(html_path).decode()
+    p.feed(contents)
 
     ret = []
     for href in p.hrefs:
@@ -228,8 +242,8 @@ def get_package_urls_from_index_json(json_path: Path) -> list[str]:
     """
     Get all urls from given simple/<package>/index.v1_json contents
     """
-    with open(json_path) as f:
-        contents_dict = json.load(f)
+    contents = fast_readall(json_path)
+    contents_dict = json.loads(contents)
     urls = [i["url"] for i in contents_dict["files"]]
     return urls
 
@@ -240,8 +254,8 @@ def get_package_urls_size_from_index_json(json_path: Path) -> list[tuple[str, in
 
     If size is not available, returns size as -1
     """
-    with open(json_path) as f:
-        contents_dict = json.load(f)
+    contents = fast_readall(json_path)
+    contents_dict = json.loads(contents)
     ret = [(i["url"], i.get("size", -1)) for i in contents_dict["files"]]
     return ret
 
@@ -938,14 +952,13 @@ class SyncPlainHTTP(SyncBase):
         return last_serial
 
 
-def get_local_serial(package_meta_path: Path) -> Optional[int]:
+def get_local_serial(package_meta_direntry: os.DirEntry[str]) -> Optional[int]:
     """
     Accepts /json/<package_name> as package_meta_path
     """
-    package_name = package_meta_path.name
+    package_name = package_meta_direntry.name
     try:
-        with open(package_meta_path) as f:
-            contents = f.read()
+        contents = fast_readall(Path(package_meta_direntry.path))
     except FileNotFoundError:
         logger.warning("%s does not have JSON metadata, skipping", package_name)
         return None
@@ -1116,7 +1129,7 @@ def genlocal(ctx: click.Context) -> None:
     logger.info("Detected %s packages in %s in total", len(dir_items), json_dir)
     for package_metapath in tqdm(dir_items, desc="Reading packages from json/"):
         package_name = package_metapath.name
-        serial = get_local_serial(Path(package_metapath.path))
+        serial = get_local_serial(package_metapath)
         if serial:
             local[package_name] = serial
     logger.info(
