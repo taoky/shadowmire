@@ -2,7 +2,7 @@
 
 import sys
 from types import FrameType
-from typing import IO, Any, Callable, Generator, Literal, NoReturn, Optional
+from typing import IO, Any, Callable, Generator, Literal, NoReturn, Optional, Set
 import xmlrpc.client
 from dataclasses import dataclass
 import re
@@ -192,7 +192,7 @@ def remove_dir_with_files(directory: Path) -> None:
 
 
 def fast_iterdir(
-    directory: Path, filter_type: Literal["dir", "file"]
+    directory: Path | str, filter_type: Literal["dir", "file"]
 ) -> Generator[os.DirEntry[str], Any, None]:
     """
     iterdir() in pathlib would ignore file type information from getdents64(),
@@ -1217,7 +1217,7 @@ def verify(
     logger.info(
         "====== Step 4. Remove any unreferenced files in `packages` folder ======"
     )
-    ref_set = set()
+    ref_set: Set[str] = set()
     with ThreadPoolExecutor(max_workers=IOWORKERS) as executor:
         # Part 1: iterate simple/
         def iterate_simple(sname: str) -> list[str]:
@@ -1258,15 +1258,15 @@ def verify(
 
         # Part 2: iterate packages
         def unlink_not_in_set(first_dirname: str, position: int) -> None:
-            for file in tqdm(
-                (basedir / "packages" / first_dirname).glob("*/*/*"),
-                desc=f"Iterating packages/{first_dirname}/*/*/*",
-                position=position,
-            ):
-                logger.debug("find file %s", file)
-                if str(file) not in ref_set:
-                    logger.info("removing unreferenced file %s", file)
-                    file.unlink()
+            with tqdm(desc=f"Iterating packages/{first_dirname}/*/*/*", position=position) as pb:
+                for d1 in fast_iterdir(basedir / "packages" / first_dirname, "dir"):
+                    for d2 in fast_iterdir(d1.path, "dir"):
+                        for file in fast_iterdir(d2.path, "file"):
+                            pb.update(1)
+                            logger.debug("find file %s", file)
+                            if file.path not in ref_set:
+                                logger.info("removing unreferenced file %s", file.path)
+                                Path(file.path).unlink()
 
         # MyPy does not enjoy same variable name with different types, even when --allow-redefinition
         # Ignore here to make mypy happy
