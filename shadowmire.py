@@ -37,7 +37,7 @@ USER_AGENT = "Shadowmire (https://github.com/taoky/shadowmire)"
 # Note that it's suggested to use only 3 workers for PyPI.
 WORKERS = int(os.environ.get("SHADOWMIRE_WORKERS", "3"))
 # Use threads to parallelize verification local IO
-IOWORKERS = int(os.environ.get("SHADOWMIRE_IOWORKERS", "5"))
+IOWORKERS = int(os.environ.get("SHADOWMIRE_IOWORKERS", "2"))
 # A safety net -- to avoid upstream issues casuing too many packages removed when determinating sync plan.
 MAX_DELETION = int(os.environ.get("SHADOWMIRE_MAX_DELETION", "50000"))
 

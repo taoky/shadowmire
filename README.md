@@ -101,7 +101,7 @@ If you already have a PyPI repo, use `genlocal` first to generate a local db:
 `verify` command accepts same arguments as sync, and accepts some new arguments. Please check `./shadowmire.py verify --help` for more information.
 
 > [!TIP]
-> You could set `SHADOWMIRE_IOWORKERS` environment variable to a number to set threads to do local I/O. Defaults to 5.
+> You could set `SHADOWMIRE_IOWORKERS` environment variable to a number to set threads to do local I/O. Defaults to 2.
 
 > [!IMPORTANT]
 > For users switching from Bandersnatch to Shadowmire, you **MUST** run the following commands (with exclusion, of course) before regular syncing:
