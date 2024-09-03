@@ -736,6 +736,27 @@ class SyncBase:
             f.write("  </body>\n</html>")
         self.local_db.dump_json()
 
+    def skip_this_package(self, i: dict, dest: Path) -> bool:
+        """
+        A helper function for subclasses implementing do_update().
+        As existence check is also done with stat(), this would not bring extra I/O overhead.
+        Returns if skip this package or not.
+        """
+        try:
+            dest_size = dest.stat().st_size
+            i_size = i.get("size", -1)
+            if i_size == -1:
+                return True
+            if dest_size == i_size:
+                return True
+            logger.warn(
+                "file %s exists locally, but size does not match with upstream, so it would still be downloaded.",
+                dest,
+            )
+            return False
+        except FileNotFoundError:
+            return False
+
 
 def download(
     session: requests.Session, url: str, dest: Path
@@ -832,8 +853,9 @@ class SyncPyPI(SyncBase):
                     )
                 )
                 logger.info("downloading file %s -> %s", url, dest)
-                if dest.exists():
+                if self.skip_this_package(i, dest):
                     continue
+
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 success, _resp = download(self.session, url, dest)
                 if not success:
@@ -926,11 +948,12 @@ class SyncPlainHTTP(SyncBase):
                 package_path = Path(normpath(package_simple_path / p))
                 package_path.unlink(missing_ok=True)
             package_simple_url = urljoin(self.upstream, f"simple/{package_name}/")
-            for href in remote_hrefs:
+            for i in release_files:
+                href = PyPI.file_url_to_local_url(i["url"])
                 url = urljoin(package_simple_url, href)
                 dest = Path(normpath(package_simple_path / href))
                 logger.info("downloading file %s -> %s", url, dest)
-                if dest.exists():
+                if self.skip_this_package(i, dest):
                     continue
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 success, resp = download(self.session, url, dest)
@@ -1258,7 +1281,9 @@ def verify(
 
         # Part 2: iterate packages
         def unlink_not_in_set(first_dirname: str, position: int) -> None:
-            with tqdm(desc=f"Iterating packages/{first_dirname}/*/*/*", position=position) as pb:
+            with tqdm(
+                desc=f"Iterating packages/{first_dirname}/*/*/*", position=position
+            ) as pb:
                 for d1 in fast_iterdir(basedir / "packages" / first_dirname, "dir"):
                     for d2 in fast_iterdir(d1.path, "dir"):
                         for file in fast_iterdir(d2.path, "file"):
