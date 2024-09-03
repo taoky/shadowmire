@@ -2,7 +2,7 @@
 
 import sys
 from types import FrameType
-from typing import IO, Any, Callable, Generator, Literal, NoReturn, Optional, Set
+from typing import IO, Any, Callable, Generator, Literal, NoReturn, Optional
 import xmlrpc.client
 from dataclasses import dataclass
 import re
@@ -537,6 +537,7 @@ class SyncBase:
         package_names: list[str],
         prerelease_excludes: list[re.Pattern[str]],
         json_files: set[str],
+        packages_pathcache: set[str],
         compare_size: bool,
     ) -> bool:
         def is_consistent(package_name: str) -> bool:
@@ -573,22 +574,29 @@ class SyncBase:
             # OK, check if all hrefs have corresponding files
             if self.sync_packages:
                 for href, size in hrefsize_json:
-                    dest = Path(normpath(package_simple_path / href))
+                    dest_pathstr = normpath(package_simple_path / href)
                     try:
-                        dest_stat = dest.stat()
+                        # Fast shortcut to avoid stat() it
+                        if dest_pathstr not in packages_pathcache:
+                            raise FileNotFoundError
+                        if compare_size and size != -1:
+                            dest = Path(normpath(package_simple_path / href))
+                            # So, do stat() for real only when we need to do so,
+                            # have a size, and it really exists in pathcache.
+                            dest_stat = dest.stat()
+                            dest_size = dest_stat.st_size
+                            if dest_size != size:
+                                logger.info(
+                                    "add %s as its local size %s != %s",
+                                    package_name,
+                                    dest_size,
+                                    size,
+                                )
+                                return False
                     except FileNotFoundError:
                         logger.info("add %s as it's missing packages", package_name)
                         return False
-                    if compare_size and size != -1:
-                        dest_size = dest_stat.st_size
-                        if dest_size != size:
-                            logger.info(
-                                "add %s as its local size %s != %s",
-                                package_name,
-                                dest_size,
-                                size,
-                            )
-                            return False
+
             return True
 
         to_update = []
@@ -1229,18 +1237,56 @@ def verify(
     # After some removal, local_names is changed.
     local_names = set(local_db.keys())
 
+    logger.info("====== Step 3. Caching packages/ dirtree in memory for Step 4 & 5.")
+    packages_pathcache: set[str] = set()
+    with ThreadPoolExecutor(max_workers=IOWORKERS) as executor:
+
+        def packages_iterate(first_dirname: str, position: int) -> list[str]:
+            with tqdm(
+                desc=f"Iterating packages/{first_dirname}/*/*/*", position=position
+            ) as pb:
+                res = []
+                for d1 in fast_iterdir(basedir / "packages" / first_dirname, "dir"):
+                    for d2 in fast_iterdir(d1.path, "dir"):
+                        for file in fast_iterdir(d2.path, "file"):
+                            pb.update(1)
+                            res.append(file.path)
+                return res
+
+        futures = {
+            executor.submit(packages_iterate, first_dir.name, idx % IOWORKERS): first_dir.name  # type: ignore
+            for idx, first_dir in enumerate(fast_iterdir((basedir / "packages"), "dir"))
+        }
+        try:
+            for future in as_completed(futures):
+                sname = futures[future]
+                try:
+                    for p in future.result():
+                        packages_pathcache.add(p)
+                except Exception as e:
+                    if isinstance(e, (KeyboardInterrupt)):
+                        raise
+                    logger.warning("%s generated an exception", sname, exc_info=True)
+                    success = False
+        except (ExitProgramException, KeyboardInterrupt):
+            exit_with_futures(futures)
+
     logger.info(
-        "====== Step 3. Make sure all local indexes are valid, and (if --sync-packages) have valid local package files ======"
+        "====== Step 4. Make sure all local indexes are valid, and (if --sync-packages) have valid local package files ======"
     )
     success = syncer.check_and_update(
-        list(local_names), prerelease_excludes, json_files, compare_size
+        list(local_names),
+        prerelease_excludes,
+        json_files,
+        packages_pathcache,
+        compare_size,
     )
     syncer.finalize()
 
     logger.info(
-        "====== Step 4. Remove any unreferenced files in `packages` folder ======"
+        "====== Step 5. Remove any unreferenced files in `packages` folder ======"
     )
-    ref_set: Set[str] = set()
+    ref_set: set[str] = set()
     with ThreadPoolExecutor(max_workers=IOWORKERS) as executor:
         # Part 1: iterate simple/
         def iterate_simple(sname: str) -> list[str]:
@@ -1257,8 +1303,10 @@ def verify(
                 nps.append(np)
             return nps
 
+        # MyPy does not enjoy same variable name with different types, even when --allow-redefinition
+        # Ignore here to make mypy happy
         futures = {
-            executor.submit(iterate_simple, sname): sname for sname in simple_dirs
+            executor.submit(iterate_simple, sname): sname for sname in simple_dirs  # type: ignore
         }
         try:
             for future in tqdm(
@@ -1279,38 +1327,11 @@ def verify(
         except (ExitProgramException, KeyboardInterrupt):
             exit_with_futures(futures)
 
-        # Part 2: iterate packages
-        def unlink_not_in_set(first_dirname: str, position: int) -> None:
-            with tqdm(
-                desc=f"Iterating packages/{first_dirname}/*/*/*", position=position
-            ) as pb:
-                for d1 in fast_iterdir(basedir / "packages" / first_dirname, "dir"):
-                    for d2 in fast_iterdir(d1.path, "dir"):
-                        for file in fast_iterdir(d2.path, "file"):
-                            pb.update(1)
-                            logger.debug("find file %s", file)
-                            if file.path not in ref_set:
-                                logger.info("removing unreferenced file %s", file.path)
-                                Path(file.path).unlink()
-
-        # MyPy does not enjoy same variable name with different types, even when --allow-redefinition
-        # Ignore here to make mypy happy
-        futures = {
-            executor.submit(unlink_not_in_set, first_dir.name, idx % IOWORKERS): first_dir.name  # type: ignore
-            for idx, first_dir in enumerate(fast_iterdir((basedir / "packages"), "dir"))
-        }
-        try:
-            for future in as_completed(futures):
-                sname = futures[future]
-                try:
-                    future.result()
-                except Exception as e:
-                    if isinstance(e, (KeyboardInterrupt)):
-                        raise
-                    logger.warning("%s generated an exception", sname, exc_info=True)
-                    success = False
-        except (ExitProgramException, KeyboardInterrupt):
-            exit_with_futures(futures)
+        # Part 2: handling packages
+        for path in tqdm(packages_pathcache, desc="Iterating path cache"):
+            if path not in ref_set:
+                logger.info("removing unreferenced file %s", path)
+                Path(path).unlink()
 
     logger.info("Verification finished. Success: %s", success)
 

@@ -107,9 +107,11 @@ If you already have a PyPI repo, use `genlocal` first to generate a local db:
 > For users switching from Bandersnatch to Shadowmire, you **MUST** run the following commands (with exclusion, of course) before regular syncing:
 >
 > 1. `./shadowmire.py genlocal`: generate database from local packages.
-> 1. `./shadowmire.py verify --sync-packages --remove-not-in-local --compare-size`: remove any local packages that were missing from upstream index (normally removed from PyPI), then download any missing metadata and packages. **This step is likely to take very long time, depending on your network and disk speed.** 
+> 1. `./shadowmire.py verify --sync-packages --remove-not-in-local --compare-size`: remove any local packages that were missing from upstream index (normally removed from PyPI), then download any missing metadata and packages. **This step is likely to take very long time, depending on your network and disk speed.**
 >     * Q: Why will there be packages that are in neither local db nor remote index?
 >     * A: They are packages without valid local metadata, and do not exist on PyPI anymore. These packages are typically downloaded a long time ago and removed from upstream, but they may still share some blobs with currently available packages. E.g. after name normalization of `Foo` to `foo`, they share all existings blobs, but `Foo` does not change any more.
+>     * Q: My HDD disk (array) is too, too, too slooooow, any method to speed up?
+>     * A: You could try remove `--compare-size` argument, at the cost of having a very small possible part of package file inconsistencies locally.
 > 1. `./shadowmire.py genlocal`: generate local database again.
 > 1. `./shadowmire.py sync --sync-packages`: synchronize new changes after verification.
 
