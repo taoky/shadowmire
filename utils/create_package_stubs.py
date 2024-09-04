@@ -3,6 +3,7 @@
 # It requires a full simple/ and db (genlocal-ed)
 # Call like: python -m utils.create_package_stubs /path/to/pypi/
 
+from urllib.parse import unquote
 from shadowmire import LocalVersionKV, get_package_urls_size_from_index_json
 from pathlib import Path
 import sys
@@ -28,7 +29,8 @@ if __name__ == "__main__":
         json_simple = package_simple_path / "index.v1_json"
         hrefsize_json = get_package_urls_size_from_index_json(json_simple)
         for href, _ in hrefsize_json:
-            dest = Path(normpath(package_simple_path / href))
+            relative = unquote(href)
+            dest = Path(normpath(package_simple_path / relative))
             dest.parent.mkdir(parents=True, exist_ok=True)
             if not dest.exists():
                 dest.touch()

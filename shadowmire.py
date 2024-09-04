@@ -7,7 +7,7 @@ import xmlrpc.client
 from dataclasses import dataclass
 import re
 import json
-from urllib.parse import urljoin, urlparse, urlunparse
+from urllib.parse import urljoin, urlparse, urlunparse, unquote
 from pathlib import Path
 from html.parser import HTMLParser
 import logging
@@ -340,10 +340,24 @@ class PyPI:
 
     @staticmethod
     def file_url_to_local_url(url: str) -> str:
+        """
+        This function should NOT be used to construct a local Path!
+        """
         parsed = urlparse(url)
         assert parsed.path.startswith("/packages")
         prefix = "../.."
         return prefix + parsed.path
+
+    @staticmethod
+    def file_url_to_local_path(url: str) -> Path:
+        """
+        Unquote() and returns a Path
+        """
+        path = urlparse(url).path
+        path = unquote(path)
+        assert path.startswith("/packages")
+        path = path[1:]
+        return Path("../..") / path
 
     # Func modified from bandersnatch
     @classmethod
@@ -574,13 +588,14 @@ class SyncBase:
             # OK, check if all hrefs have corresponding files
             if self.sync_packages:
                 for href, size in hrefsize_json:
-                    dest_pathstr = normpath(package_simple_path / href)
+                    relative_path = unquote(href)
+                    dest_pathstr = normpath(package_simple_path / relative_path)
                     try:
                         # Fast shortcut to avoid stat() it
                         if dest_pathstr not in packages_pathcache:
                             raise FileNotFoundError
                         if compare_size and size != -1:
-                            dest = Path(normpath(package_simple_path / href))
+                            dest = Path(dest_pathstr)
                             # So, do stat() for real only when we need to do so,
                             # have a size, and it really exists in pathcache.
                             dest_stat = dest.stat()
@@ -849,7 +864,8 @@ class SyncPyPI(SyncBase):
                 self.pypi.file_url_to_local_url(i["url"]) for i in release_files
             ]
             should_remove = list(set(existing_hrefs) - set(remote_hrefs))
-            for p in should_remove:
+            for href in should_remove:
+                p = unquote(href)
                 logger.info("removing file %s (if exists)", p)
                 package_path = Path(normpath(package_simple_path / p))
                 package_path.unlink(missing_ok=True)
@@ -857,7 +873,7 @@ class SyncPyPI(SyncBase):
                 url = i["url"]
                 dest = Path(
                     normpath(
-                        package_simple_path / self.pypi.file_url_to_local_url(i["url"])
+                        package_simple_path / self.pypi.file_url_to_local_path(i["url"])
                     )
                 )
                 logger.info("downloading file %s -> %s", url, dest)
@@ -951,15 +967,17 @@ class SyncPlainHTTP(SyncBase):
             release_files = PyPI.get_release_files_from_meta(meta)
             remote_hrefs = [PyPI.file_url_to_local_url(i["url"]) for i in release_files]
             should_remove = list(set(existing_hrefs) - set(remote_hrefs))
-            for p in should_remove:
+            for href in should_remove:
+                p = unquote(href)
                 logger.info("removing file %s (if exists)", p)
                 package_path = Path(normpath(package_simple_path / p))
                 package_path.unlink(missing_ok=True)
             package_simple_url = urljoin(self.upstream, f"simple/{package_name}/")
             for i in release_files:
                 href = PyPI.file_url_to_local_url(i["url"])
+                path = PyPI.file_url_to_local_path(i["url"])
                 url = urljoin(package_simple_url, href)
-                dest = Path(normpath(package_simple_path / href))
+                dest = Path(normpath(package_simple_path / path))
                 logger.info("downloading file %s -> %s", url, dest)
                 if self.skip_this_package(i, dest):
                     continue
@@ -1313,12 +1331,12 @@ def verify(
             hrefs = get_existing_hrefs(sd)
             hrefs = [] if hrefs is None else hrefs
             nps = []
-            for i in hrefs:
+            for href in hrefs:
+                i = unquote(href)
                 # use normpath, which is much faster than pathlib resolve(), as it does not need to access fs
                 # we could make sure no symlinks could affect this here
                 np = normpath(sd / i)
                 logger.debug("add to ref_set: %s", np)
-                # ref_set.add(np)
                 nps.append(np)
             return nps
 
