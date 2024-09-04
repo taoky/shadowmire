@@ -1158,11 +1158,30 @@ def genlocal(ctx: click.Context) -> None:
     logger.info("Iterating all items under %s", json_dir)
     dir_items = [d for d in fast_iterdir(json_dir, "file")]
     logger.info("Detected %s packages in %s in total", len(dir_items), json_dir)
-    for package_metapath in tqdm(dir_items, desc="Reading packages from json/"):
-        package_name = package_metapath.name
-        serial = get_local_serial(package_metapath)
-        if serial:
-            local[package_name] = serial
+    with ThreadPoolExecutor(max_workers=IOWORKERS) as executor:
+        futures = {
+            executor.submit(get_local_serial, package_metapath): package_metapath
+            for package_metapath in dir_items
+        }
+        try:
+            for future in tqdm(
+                as_completed(futures),
+                total=len(dir_items),
+                desc="Reading packages from json/",
+            ):
+                package_name = futures[future].name
+                try:
+                    serial = future.result()
+                    if serial:
+                        local[package_name] = serial
+                except Exception as e:
+                    if isinstance(e, (KeyboardInterrupt)):
+                        raise
+                    logger.warning(
+                        "%s generated an exception", package_name, exc_info=True
+                    )
+        except (ExitProgramException, KeyboardInterrupt):
+            exit_with_futures(futures)
     logger.info(
         "%d out of %d packages have valid serial number", len(local), len(dir_items)
     )
