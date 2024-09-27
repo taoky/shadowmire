@@ -772,7 +772,7 @@ class SyncBase:
                 return True
             if dest_size == i_size:
                 return True
-            logger.warn(
+            logger.warning(
                 "file %s exists locally, but size does not match with upstream, so it would still be downloaded.",
                 dest,
             )
