@@ -22,6 +22,8 @@ from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 import signal
 import tomllib
 from copy import deepcopy
+import functools
+from http.client import HTTPConnection
 
 import requests
 import click
@@ -285,9 +287,20 @@ class CustomXMLRPCTransport(xmlrpc.client.Transport):
 
     user_agent = USER_AGENT
 
+    def make_connection(self, host: tuple[str, dict[str, str]] | str) -> HTTPConnection:
+        conn = super().make_connection(host)
+        if conn.timeout is None:
+            # 2 min timeout
+            conn.timeout = 120
+        return conn
+
 
 def create_requests_session() -> requests.Session:
     s = requests.Session()
+    # hardcode 1min timeout for connect & read for now
+    # https://requests.readthedocs.io/en/latest/user/advanced/#timeouts
+    # A hack to overwrite get() method
+    s.get_orig, s.get = s.get, functools.partial(s.get, timeout=(60, 60))  # type: ignore
     retries = Retry(total=3, backoff_factor=0.1)
     s.mount("http://", HTTPAdapter(max_retries=retries))
     s.mount("https://", HTTPAdapter(max_retries=retries))
