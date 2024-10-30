@@ -117,6 +117,13 @@ class LocalVersionKV:
         cur.execute("DELETE FROM local WHERE key = ?", (key,))
         self.conn.commit()
 
+    def remove_invalid(self) -> int:
+        cur = self.conn.cursor()
+        cur.execute("DELETE FROM local WHERE value = -1")
+        rowcnt = cur.rowcount
+        self.conn.commit()
+        return rowcnt
+
     def nuke(self, commit: bool = True) -> None:
         cur = self.conn.cursor()
         cur.execute("DELETE FROM local")
@@ -1474,6 +1481,14 @@ def list_packages_with_serial(ctx: click.Context) -> None:
     local_db = ctx.obj["local_db"]
     syncer = SyncPyPI(basedir, local_db)
     syncer.fetch_remote_versions()
+
+
+@cli.command(help="Clear invalid package status in local database")
+@click.pass_context
+def clear_invalid_packages(ctx: click.Context) -> None:
+    local_db: LocalVersionKV = ctx.obj["local_db"]
+    total = local_db.remove_invalid()
+    logger.info("Removed %s invalid status in local database", total)
 
 
 if __name__ == "__main__":
