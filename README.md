@@ -125,6 +125,10 @@ If you don't like appending a long argument list, you could use `--config` ([exa
 
 Also, if you need debugging, you could use `do-update` and `do-remove` command to operate on a single package.
 
+## License
+
+Apache-2.0/AFL-3.0 dual license
+
 ## Acknowledgements
 
 This project uses some code from PyPI's official mirroring tools, [bandersnatch](https://github.com/pypa/bandersnatch). It uses Academic Free License v3, and you could read its license contents [here](./LICENSE.AFL).
