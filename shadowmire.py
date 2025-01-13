@@ -24,6 +24,7 @@ import tomllib
 from copy import deepcopy
 import functools
 from http.client import HTTPConnection
+import socket
 
 import requests
 import click
@@ -298,8 +299,9 @@ class CustomXMLRPCTransport(xmlrpc.client.Transport):
 
     def make_connection(self, host: tuple[str, dict[str, str]] | str) -> HTTPConnection:
         conn = super().make_connection(host)
-        if conn.timeout is None:
-            # 2 min timeout
+        if socket.getdefaulttimeout() is None:
+            # By default conn.timeout is socket._GLOBAL_DEFAULT_TIMEOUT instead of None.
+            # So here we check if default timeout is set, and if not, add a 2-min timeout
             conn.timeout = 120
         return conn
 
