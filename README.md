@@ -63,6 +63,12 @@ Also it supports prerelease filtering like [this](https://bandersnatch.readthedo
 ./shadowmire.py sync --sync-packages --prerelease-exclude '^duckdb$'
 ```
 
+Also wheel filename filtering is also supported, if you need to exclude wheels by platform, python version, etc.:
+
+```shell
+./shadowmire.py sync --sync-packages --excluded-wheel-filename '-macosx-10.6-ppc.whl$'
+```
+
 And `--shadowmire-upstream`, if you don't want to sync from PyPI directly.
 
 ```shell
