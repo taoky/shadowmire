@@ -9,3 +9,4 @@ exclude = [
 prerelease_exclude = [
     ".+"
 ]
+excluded_wheel_filename = []
