@@ -47,6 +47,7 @@ MAX_DELETION = int(os.environ.get("SHADOWMIRE_MAX_DELETION", "50000"))
 IGNORE_THRESHOLD = int(os.environ.get("SHADOWMIRE_IGNORE_THRESHOLD", "1024"))
 
 # https://github.com/pypa/bandersnatch/blob/a05af547f8d1958217ef0dc0028890b1839e6116/src/bandersnatch_filter_plugins/prerelease_name.py#L18C1-L23C6
+# These patterns shall work same in both re.match() and re.search(), as they begin with .+
 PRERELEASE_PATTERNS = (
     re.compile(r".+rc\d+$"),
     re.compile(r".+a(lpha)?\d+$"),
@@ -490,8 +491,13 @@ class Plan:
 def match_patterns(
     s: str, ps: list[re.Pattern[str]] | tuple[re.Pattern[str], ...]
 ) -> bool:
+    """
+    Search if any of the patterns match the string `s`.
+
+    Uses re.search(), matching anywhere in the string.
+    """
     for p in ps:
-        if p.match(s):
+        if p.search(s):
             return True
     return False
 
