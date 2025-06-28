@@ -4,6 +4,10 @@ Shadowmire syncs PyPI (or plain HTTP(S) PyPI mirrors using Shadowmire) with a li
 
 Requires Python 3.11+.
 
+## Breaking Changes
+
+- [2025-06-29] ([8ad920e](https://github.com/taoky/shadowmire/commit/8ad920ee82e34de49bbaa37109d1233bbe604634)): Regex pattern matching now uses `re.search()` instead of `re.match()`. Please check `exclude` and `prerelease_exclude` rules if you are using them. For example, `[a-z]` matches any package name that contains a lowercase letter, instead of only matching package names that start with a lowercase letter.
+
 ## Docs
 
 ### Background
