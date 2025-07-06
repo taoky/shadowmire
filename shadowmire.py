@@ -1092,12 +1092,15 @@ class SyncPlainHTTP(SyncBase):
                 if not success:
                     if resp and resp.status_code == 404:
                         # handle special case: upstream filters out some files
-                        logger.warning("cannot find %s at upstream, fallback to pypi", url)
+                        logger.warning(
+                            "cannot find %s at upstream, fallback to pypi", url
+                        )
                         url = i["url"]  # original pypi URL
                         success, resp = download(self.session, url, dest)
                         if not success:
                             logger.warning(
-                                "skipping %s as it fails downloading (from pypi)", package_name
+                                "skipping %s as it fails downloading (from pypi)",
+                                package_name,
                             )
                             return None
                     else:
