@@ -674,7 +674,9 @@ class SyncBase:
                 exit_with_futures(futures)
 
         logger.info("%s packages to update in check_and_update()", len(to_update))
-        return self.parallel_update(to_update, prerelease_excludes, excluded_wheel_filenames)
+        return self.parallel_update(
+            to_update, prerelease_excludes, excluded_wheel_filenames
+        )
 
     def parallel_update(
         self,
@@ -732,7 +734,9 @@ class SyncBase:
         for package_name in to_remove:
             self.do_remove(package_name)
 
-        return self.parallel_update(to_update, prerelease_excludes, excluded_wheel_filenames)
+        return self.parallel_update(
+            to_update, prerelease_excludes, excluded_wheel_filenames
+        )
 
     def do_remove(
         self, package_name: str, use_db: bool = True, remove_packages: bool = True
@@ -848,21 +852,33 @@ def download(
 
 def filter_release_from_meta(
     meta: dict, patterns: list[re.Pattern[str]] | tuple[re.Pattern[str], ...]
-) -> None:
+) -> bool:
+    """
+    Returns True if meta changes, False otherwise.
+    """
+    changed = False
     for release in list(meta["releases"].keys()):
         if match_patterns(release, patterns):
             del meta["releases"][release]
+            changed = True
+    return changed
 
 
 def filter_wheel_file_from_meta(
     meta: dict, patterns: list[re.Pattern[str]] | tuple[re.Pattern[str], ...]
-) -> None:
+) -> bool:
+    """
+    Returns True if meta changes, False otherwise.
+    """
+    changed = False
     for release_infos in meta["releases"].values():
         for release_idx in range(len(release_infos) - 1, -1, -1):
             release_info = release_infos[release_idx]
             filename = release_info["filename"]
             if match_patterns(filename, patterns):
                 del release_infos[release_idx]
+                changed = True
+    return changed
 
 
 class SyncPyPI(SyncBase):
@@ -976,6 +992,9 @@ class SyncPyPI(SyncBase):
         json_meta_path = self.jsonmeta_dir / package_name
         with overwrite(json_meta_path) as f:
             # Note that we're writing meta_original here!
+            # This is also the case for SyncPlainHTTP.
+            # When syncing, we want to keep the original meta (json/),
+            # but index.v1_json and index.v1_html are generated from modified meta.
             json.dump(meta_original, f)
 
         if use_db:
@@ -1071,8 +1090,21 @@ class SyncPlainHTTP(SyncBase):
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 success, resp = download(self.session, url, dest)
                 if not success:
-                    logger.warning("skipping %s as it fails downloading", package_name)
-                    return None
+                    if resp and resp.status_code == 404:
+                        # handle special case: upstream filters out some files
+                        logger.warning("cannot find %s at upstream, fallback to pypi", url)
+                        url = i["url"]  # original pypi URL
+                        success, resp = download(self.session, url, dest)
+                        if not success:
+                            logger.warning(
+                                "skipping %s as it fails downloading (from pypi)", package_name
+                            )
+                            return None
+                    else:
+                        logger.warning(
+                            "skipping %s as it fails downloading", package_name
+                        )
+                        return None
 
         # OK, now it's safe to rename
         (self.jsonmeta_dir / (package_name + ".new")).rename(
