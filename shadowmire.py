@@ -618,6 +618,30 @@ class SyncBase:
                 # something unexpected happens...
                 logger.info("add %s as its indexes are not consistent", package_name)
                 return False
+            # Check with JSON meta, ensuring that package file list is consistent
+            json_meta_path = self.jsonmeta_dir / package_name
+            try:
+                with open(json_meta_path, "r") as f:
+                    meta = json.load(f)
+                meta_filters(meta, package_name, prerelease_excludes, excluded_wheel_filenames)
+                release_files = PyPI.get_release_files_from_meta(meta)
+                hrefs_from_meta = {
+                    PyPI.file_url_to_local_url(i["url"]) for i in release_files
+                }
+            except (json.JSONDecodeError, FileNotFoundError, KeyError):
+                logger.info(
+                    "add %s as its JSON meta is not valid",
+                    package_name,
+                )
+                return False
+            for href in hrefs_html:
+                if href not in hrefs_from_meta:
+                    logger.info(
+                        "add %s as its HTML index has href %s not in JSON meta",
+                        package_name,
+                        href,
+                    )
+                    return False
 
             # OK, check if all hrefs have corresponding files
             if self.sync_packages:
@@ -881,6 +905,24 @@ def filter_wheel_file_from_meta(
     return changed
 
 
+def meta_filters(
+    meta: dict,
+    package_name: str,
+    prerelease_excludes: list[re.Pattern[str]],
+    excluded_wheel_filenames: list[re.Pattern[str]],
+):
+    """
+    Apply filters to the package meta.
+    Returns True if meta changes, False otherwise.
+    """
+    changed = False
+    if match_patterns(package_name, prerelease_excludes):
+        changed |= filter_release_from_meta(meta, PRERELEASE_PATTERNS)
+    if excluded_wheel_filenames:
+        changed |= filter_wheel_file_from_meta(meta, excluded_wheel_filenames)
+    return changed
+
+
 class SyncPyPI(SyncBase):
     def __init__(
         self, basedir: Path, local_db: LocalVersionKV, sync_packages: bool = False
@@ -949,10 +991,7 @@ class SyncPyPI(SyncBase):
             return None
 
         # filter prerelease and wheel files, if necessary
-        if match_patterns(package_name, prerelease_excludes):
-            filter_release_from_meta(meta, PRERELEASE_PATTERNS)
-        if excluded_wheel_filenames:
-            filter_wheel_file_from_meta(meta, excluded_wheel_filenames)
+        meta_filters(meta, package_name, prerelease_excludes, excluded_wheel_filenames)
 
         if self.sync_packages:
             # sync packages first, then sync index
@@ -961,7 +1000,7 @@ class SyncPyPI(SyncBase):
             release_files = PyPI.get_release_files_from_meta(meta)
             # remove packages that no longer exist remotely
             remote_hrefs = [
-                self.pypi.file_url_to_local_url(i["url"]) for i in release_files
+                PyPI.file_url_to_local_url(i["url"]) for i in release_files
             ]
             should_remove = list(set(existing_hrefs) - set(remote_hrefs))
             for href in should_remove:
@@ -1064,10 +1103,7 @@ class SyncPlainHTTP(SyncBase):
         assert resp
         meta = resp.json()
         # filter prerelease and wheel files, if necessary
-        if match_patterns(package_name, prerelease_excludes):
-            filter_release_from_meta(meta, PRERELEASE_PATTERNS)
-        if excluded_wheel_filenames:
-            filter_wheel_file_from_meta(meta, excluded_wheel_filenames)
+        meta_filters(meta, package_name, prerelease_excludes, excluded_wheel_filenames)
 
         if self.sync_packages:
             release_files = PyPI.get_release_files_from_meta(meta)
@@ -1503,7 +1539,7 @@ def verify(
         for path in tqdm(packages_pathcache, desc="Iterating path cache"):
             if path not in ref_set:
                 logger.info("removing unreferenced file %s", path)
-                Path(path).unlink()
+                Path(path).unlink(missing_ok=True)
 
     logger.info("Verification finished. Success: %s", success)
 
