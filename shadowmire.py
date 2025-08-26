@@ -44,7 +44,7 @@ IOWORKERS = int(os.environ.get("SHADOWMIRE_IOWORKERS", "2"))
 # A safety net -- to avoid upstream issues casuing too many packages removed when determinating sync plan.
 MAX_DELETION = int(os.environ.get("SHADOWMIRE_MAX_DELETION", "50000"))
 # Sometimes PyPI is not consistent -- new packages could not be fetched. This option tries to avoid permanently mark that kind of package as nonexist.
-IGNORE_THRESHOLD = int(os.environ.get("SHADOWMIRE_IGNORE_THRESHOLD", "1024"))
+IGNORE_THRESHOLD = int(os.environ.get("SHADOWMIRE_IGNORE_THRESHOLD", "10000"))
 
 # https://github.com/pypa/bandersnatch/blob/a05af547f8d1958217ef0dc0028890b1839e6116/src/bandersnatch_filter_plugins/prerelease_name.py#L18C1-L23C6
 # These patterns shall work same in both re.match() and re.search(), as they begin with .+
