@@ -1,4 +1,5 @@
 -r requirements.txt
+-r requirements-genlist.txt
 black==24.4.2
 mypy==1.11.0
 types-requests~=2.32.0

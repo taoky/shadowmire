@@ -579,6 +579,9 @@ class SyncBase:
     def fetch_remote_versions(self) -> dict[str, int]:
         raise NotImplementedError
 
+    def get_package_metadata(self, package_name: str) -> dict:
+        raise NotImplementedError
+
     def check_and_update(
         self,
         package_names: list[str],
@@ -623,7 +626,9 @@ class SyncBase:
             try:
                 with open(json_meta_path, "r") as f:
                     meta = json.load(f)
-                meta_filters(meta, package_name, prerelease_excludes, excluded_wheel_filenames)
+                meta_filters(
+                    meta, package_name, prerelease_excludes, excluded_wheel_filenames
+                )
                 release_files = PyPI.get_release_files_from_meta(meta)
                 hrefs_from_meta = {
                     PyPI.file_url_to_local_url(i["url"]) for i in release_files
@@ -941,6 +946,9 @@ class SyncPyPI(SyncBase):
             json.dump(self.remote_packages, f)
             logger.info("File saved to remote.json.")
         return self.remote_packages
+    
+    def get_package_metadata(self, package_name: str) -> dict:
+        return self.pypi.get_package_metadata(package_name)
 
     def do_update(
         self,
@@ -953,7 +961,7 @@ class SyncPyPI(SyncBase):
         package_simple_path = self.simple_dir / package_name
         package_simple_path.mkdir(exist_ok=True)
         try:
-            meta = self.pypi.get_package_metadata(package_name)
+            meta = self.get_package_metadata(package_name)
             meta_original = deepcopy(meta)
             logger.debug("%s meta: %s", package_name, meta)
         except PackageNotFoundError:
@@ -999,9 +1007,7 @@ class SyncPyPI(SyncBase):
             existing_hrefs = [] if existing_hrefs is None else existing_hrefs
             release_files = PyPI.get_release_files_from_meta(meta)
             # remove packages that no longer exist remotely
-            remote_hrefs = [
-                PyPI.file_url_to_local_url(i["url"]) for i in release_files
-            ]
+            remote_hrefs = [PyPI.file_url_to_local_url(i["url"]) for i in release_files]
             should_remove = list(set(existing_hrefs) - set(remote_hrefs))
             for href in should_remove:
                 p = unquote(href)
@@ -1074,6 +1080,21 @@ class SyncPlainHTTP(SyncBase):
             json.dump(remote, f)
             logger.info("File saved to remote.json.")
         return remote
+    
+    def get_package_metadata(self, package_name: str) -> dict:
+        file_url = urljoin(self.upstream, f"json/{package_name}")
+        success, resp = download(
+            self.session, file_url, self.jsonmeta_dir / (package_name + ".new")
+        )
+        if not success:
+            logger.error(
+                "download %s JSON meta fails with code %s",
+                package_name,
+                resp.status_code if resp else None,
+            )
+            raise PackageNotFoundError
+        assert resp
+        return resp.json()
 
     def do_update(
         self,
@@ -1089,19 +1110,10 @@ class SyncPlainHTTP(SyncBase):
             hrefs = get_existing_hrefs(package_simple_path)
             existing_hrefs = [] if hrefs is None else hrefs
         # Download JSON meta
-        file_url = urljoin(self.upstream, f"json/{package_name}")
-        success, resp = download(
-            self.session, file_url, self.jsonmeta_dir / (package_name + ".new")
-        )
-        if not success:
-            logger.error(
-                "download %s JSON meta fails with code %s",
-                package_name,
-                resp.status_code if resp else None,
-            )
+        try:
+            meta = self.get_package_metadata(package_name)
+        except PackageNotFoundError:
             return None
-        assert resp
-        meta = resp.json()
         # filter prerelease and wheel files, if necessary
         meta_filters(meta, package_name, prerelease_excludes, excluded_wheel_filenames)
 
