@@ -844,8 +844,8 @@ class SyncBase:
         # always link index.html to index.v1_html
         html_simple_path = self.basedir / "simple" / "index.html"
         if not html_simple_path.is_symlink():
-                html_simple_path.unlink(missing_ok=True)
-                html_simple_path.symlink_to("index.v1_html")
+            html_simple_path.unlink(missing_ok=True)
+            html_simple_path.symlink_to("index.v1_html")
 
         # generate v1_json index and local.db{,.serial} for downstream use
         v1_json_index_path = self.basedir / "simple" / "index.v1_json"
@@ -971,7 +971,7 @@ class SyncPyPI(SyncBase):
             json.dump(self.remote_packages, f)
             logger.info("File saved to remote.json.")
         return self.last_serial, self.remote_packages
-    
+
     def get_package_metadata(self, package_name: str) -> dict:
         return self.pypi.get_package_metadata(package_name)
 
@@ -1119,7 +1119,7 @@ class SyncPlainHTTP(SyncBase):
             json.dump(remote_pkgs, f)
             logger.info("File saved to remote.json.")
         return serial, remote_pkgs
-    
+
     def get_package_metadata(self, package_name: str) -> dict:
         file_url = urljoin(self.upstream, f"json/{package_name}")
         success, resp = download(
