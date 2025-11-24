@@ -3,6 +3,7 @@ __pycache__/
 simple/
 local.json
 local.db
+local.db.serial
 plan.json
 remote.json
 venv/
