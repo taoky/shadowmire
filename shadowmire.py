@@ -507,6 +507,66 @@ def match_patterns(
     return False
 
 
+class PackageInclusionChecker:
+    """
+    A class for handling packages inclusion/exclusion based on regex patterns.
+    """
+
+    def __init__(self, exclude: tuple[str], include: tuple[str]) -> None:
+        self.excludes = compile_regexes(exclude)
+        self.includes = compile_regexes(include)
+
+    def has_rules(self):
+        return bool(self.excludes or self.includes)
+
+    def is_included(self, package_name: str) -> bool:
+        if not self.has_rules():
+            return True
+        if self.includes:
+            # Ignore excludes if includes are specified
+            return match_patterns(package_name, self.includes)
+        else:
+            return not match_patterns(package_name, self.excludes)
+
+
+class FileInclusionChecker:
+    """
+    A class for handling releases/file inclusion/exclusion based on regex patterns.
+    """
+
+    def __init__(
+        self,
+        prerelease_exclude: tuple[str],
+        excluded_wheel_filename: tuple[str],
+        filter_meta: bool,
+    ) -> None:
+        self.prerelease_excludes = compile_regexes(prerelease_exclude)
+        self.excluded_wheel_filenames = compile_regexes(excluded_wheel_filename)
+        self.filter_meta = filter_meta
+
+    def has_rules(self):
+        return bool(self.prerelease_excludes or self.excluded_wheel_filenames)
+
+    def get_filtered_meta(self, package_name: str, meta: dict) -> dict:
+        """
+        If filter_meta is True, modifies meta in place and returns it.
+        Otherwise the original meta is not modified, and a filtered copy is returned.
+        """
+        if not self.has_rules():
+            return meta
+        if self.filter_meta:
+            new_meta = meta
+        else:
+            new_meta = deepcopy(meta)
+        meta_filters(
+            new_meta,
+            package_name,
+            self.prerelease_excludes,
+            self.excluded_wheel_filenames,
+        )
+        return new_meta
+
+
 class SyncBase:
     def __init__(
         self, basedir: Path, local_db: LocalVersionKV, sync_packages: bool = False
@@ -522,8 +582,8 @@ class SyncBase:
         self.jsonmeta_dir.mkdir(parents=True, exist_ok=True)
         self.sync_packages = sync_packages
 
-    def filter_remote_with_excludes(
-        self, remote: dict[str, int], excludes: list[re.Pattern[str]]
+    def filter_remote(
+        self, remote: dict[str, int], package_inclusion_checker: PackageInclusionChecker
     ) -> dict[str, int]:
         if not excludes:
             return remote
@@ -535,13 +595,13 @@ class SyncBase:
         return res
 
     def determine_sync_plan(
-        self, local: dict[str, int], excludes: list[re.Pattern[str]]
+        self, local: dict[str, int], package_inclusion_checker: PackageInclusionChecker
     ) -> Plan:
         """
         local should NOT skip invalid (-1) serials
         """
         remote_sn, remote_pkgs = self.fetch_remote_versions()
-        remote_pkgs = self.filter_remote_with_excludes(remote_pkgs, excludes)
+        remote_pkgs = self.filter_remote(remote_pkgs, package_inclusion_checker)
         with open(self.basedir / "remote_excluded.json", "w") as f:
             json.dump(remote_pkgs, f)
 
@@ -591,8 +651,7 @@ class SyncBase:
     def check_and_update(
         self,
         package_names: list[str],
-        prerelease_excludes: list[re.Pattern[str]],
-        excluded_wheel_filenames: list[re.Pattern[str]],
+        file_inclusion_checker: FileInclusionChecker,
         json_files: set[str],
         packages_pathcache: set[str],
         compare_size: bool,
@@ -709,15 +768,12 @@ class SyncBase:
                 exit_with_futures(futures)
 
         logger.info("%s packages to update in check_and_update()", len(to_update))
-        return self.parallel_update(
-            to_update, prerelease_excludes, excluded_wheel_filenames
-        )
+        return self.parallel_update(to_update, file_inclusion_checker)
 
     def parallel_update(
         self,
         package_names: list[str],
-        prerelease_excludes: list[re.Pattern[str]],
-        excluded_wheel_filenames: list[re.Pattern[str]],
+        file_inclusion_checker: FileInclusionChecker,
     ) -> bool:
         success = True
         with ThreadPoolExecutor(max_workers=WORKERS) as executor:
@@ -725,8 +781,7 @@ class SyncBase:
                 executor.submit(
                     self.do_update,
                     package_name,
-                    prerelease_excludes,
-                    excluded_wheel_filenames,
+                    file_inclusion_checker,
                     False,
                 ): (
                     idx,
@@ -760,8 +815,7 @@ class SyncBase:
     def do_sync_plan(
         self,
         plan: Plan,
-        prerelease_excludes: list[re.Pattern[str]],
-        excluded_wheel_filenames: list[re.Pattern[str]],
+        file_inclusion_checker: FileInclusionChecker,
     ) -> bool:
         to_remove = plan.remove
         to_update = plan.update
@@ -769,9 +823,7 @@ class SyncBase:
         for package_name in to_remove:
             self.do_remove(package_name)
 
-        return self.parallel_update(
-            to_update, prerelease_excludes, excluded_wheel_filenames
-        )
+        return self.parallel_update(to_update, file_inclusion_checker)
 
     def do_remove(
         self, package_name: str, use_db: bool = True, remove_packages: bool = True
@@ -799,8 +851,7 @@ class SyncBase:
     def do_update(
         self,
         package_name: str,
-        prerelease_excludes: list[re.Pattern[str]],
-        excluded_wheel_filenames: list[re.Pattern[str]],
+        file_inclusion_checker: FileInclusionChecker,
         use_db: bool = True,
     ) -> Optional[int]:
         raise NotImplementedError
@@ -978,8 +1029,7 @@ class SyncPyPI(SyncBase):
     def do_update(
         self,
         package_name: str,
-        prerelease_excludes: list[re.Pattern[str]],
-        excluded_wheel_filenames: list[re.Pattern[str]],
+        file_inclusion_checker: FileInclusionChecker,
         use_db: bool = True,
     ) -> Optional[int]:
         logger.info("updating %s", package_name)
@@ -1138,8 +1188,7 @@ class SyncPlainHTTP(SyncBase):
     def do_update(
         self,
         package_name: str,
-        prerelease_excludes: list[re.Pattern[str]],
-        excluded_wheel_filenames: list[re.Pattern[str]],
+        file_inclusion_checker: FileInclusionChecker,
         use_db: bool = True,
     ) -> Optional[int]:
         logger.info("updating %s", package_name)
@@ -1250,6 +1299,11 @@ def sync_shared_args(func: Callable[..., Any]) -> Callable[..., Any]:
             "--exclude", multiple=True, help="Remote package names to exclude. Regex."
         ),
         click.option(
+            "--include",
+            multiple=True,
+            help="Only include these remote package names. Regex. If set --exclude is ignored.",
+        ),
+        click.option(
             "--prerelease-exclude",
             multiple=True,
             help="Package names of which prereleases will be excluded. Regex.",
@@ -1259,10 +1313,33 @@ def sync_shared_args(func: Callable[..., Any]) -> Callable[..., Any]:
             multiple=True,
             help="Specify patterns to exclude wheel files (applies to all packages). Regex.",
         ),
+        click.option(
+            "--filter-metadata",
+            default=True,
+            help="Whether to modify each package's metadata according to release and file filtering rules.",
+        ),
     ]
-    for option in shared_options[::-1]:
-        func = option(func)
-    return func
+
+    @functools.wraps(func)
+    @click.pass_context
+    def wrapper(ctx: click.Context, *args, **kwargs):
+        package_inclusion_checker = PackageInclusionChecker(
+            exclude=kwargs.pop("exclude"),
+            include=kwargs.pop("include"),
+        )
+        file_inclusion_checker = FileInclusionChecker(
+            prerelease_exclude=kwargs.pop("prerelease_exclude"),
+            excluded_wheel_filename=kwargs.pop("excluded_wheel_filename"),
+            filter_meta=kwargs.pop("filter_metadata"),
+        )
+        kwargs["package_inclusion_checker"] = package_inclusion_checker
+        kwargs["file_inclusion_checker"] = file_inclusion_checker
+        return ctx.invoke(func, *args, **kwargs)
+
+    decorated = wrapper
+    for opt in reversed(shared_options):
+        decorated = opt(decorated)
+    return decorated
 
 
 def read_config(
@@ -1320,7 +1397,7 @@ def cli(ctx: click.Context, repo: str) -> None:
     ctx.obj["local_db"] = local_db
 
 
-def exclude_to_excludes(exclude: tuple[str]) -> list[re.Pattern[str]]:
+def compile_regexes(exclude: tuple[str]) -> list[re.Pattern[str]]:
     return [re.compile(i) for i in exclude]
 
 
@@ -1354,25 +1431,21 @@ def sync(
     ctx: click.Context,
     sync_packages: bool,
     shadowmire_upstream: Optional[str],
-    exclude: tuple[str],
-    prerelease_exclude: tuple[str],
-    excluded_wheel_filename: tuple[str],
+    package_inclusion_checker: PackageInclusionChecker,
+    file_inclusion_checker: FileInclusionChecker,
     use_pypi_index: bool,
 ) -> None:
     basedir: Path = ctx.obj["basedir"]
     local_db: LocalVersionKV = ctx.obj["local_db"]
-    excludes = exclude_to_excludes(exclude)
-    prerelease_excludes = exclude_to_excludes(prerelease_exclude)
-    excluded_wheel_filenames = exclude_to_excludes(excluded_wheel_filename)
     syncer = get_syncer(
         basedir, local_db, sync_packages, shadowmire_upstream, use_pypi_index
     )
     local = local_db.dump(skip_invalid=False)
-    plan = syncer.determine_sync_plan(local, excludes)
+    plan = syncer.determine_sync_plan(local, package_inclusion_checker)
     # save plan for debugging
     with overwrite(basedir / "plan.json") as f:
         json.dump(plan, f, default=vars, indent=2)
-    success = syncer.do_sync_plan(plan, prerelease_excludes, excluded_wheel_filenames)
+    success = syncer.do_sync_plan(plan, file_inclusion_checker)
     syncer.finalize(plan.remote_last_serial)
 
     logger.info("Synchronization finished. Success: %s", success)
@@ -1440,18 +1513,14 @@ def verify(
     ctx: click.Context,
     sync_packages: bool,
     shadowmire_upstream: Optional[str],
-    exclude: tuple[str],
-    prerelease_exclude: tuple[str],
-    excluded_wheel_filename: tuple[str],
+    package_inclusion_checker: PackageInclusionChecker,
+    file_inclusion_checker: FileInclusionChecker,
     remove_not_in_local: bool,
     compare_size: bool,
     use_pypi_index: bool,
 ) -> None:
     basedir: Path = ctx.obj["basedir"]
     local_db: LocalVersionKV = ctx.obj["local_db"]
-    excludes = exclude_to_excludes(exclude)
-    prerelease_excludes = exclude_to_excludes(prerelease_exclude)
-    excluded_wheel_filenames = exclude_to_excludes(excluded_wheel_filename)
     syncer = get_syncer(
         basedir, local_db, sync_packages, shadowmire_upstream, use_pypi_index
     )
@@ -1478,7 +1547,7 @@ def verify(
 
     logger.info("====== Step 2. Remove packages NOT in remote index ======")
     local = local_db.dump(skip_invalid=False)
-    plan = syncer.determine_sync_plan(local, excludes)
+    plan = syncer.determine_sync_plan(local, package_inclusion_checker)
     logger.info(
         "%s packages NOT in remote index -- this might contain packages that also do not exist locally",
         len(plan.remove),
@@ -1532,8 +1601,7 @@ def verify(
     )
     success = syncer.check_and_update(
         list(local_names),
-        prerelease_excludes,
-        excluded_wheel_filenames,
+        file_inclusion_checker,
         json_files,
         packages_pathcache,
         compare_size,
@@ -1605,23 +1673,19 @@ def do_update(
     ctx: click.Context,
     sync_packages: bool,
     shadowmire_upstream: Optional[str],
-    exclude: tuple[str],
-    prerelease_exclude: tuple[str],
-    excluded_wheel_filename: tuple[str],
+    package_inclusion_checker: PackageInclusionChecker,
+    file_inclusion_checker: FileInclusionChecker,
     use_pypi_index: bool,
     package_name: str,
 ) -> None:
     basedir: Path = ctx.obj["basedir"]
     local_db: LocalVersionKV = ctx.obj["local_db"]
-    excludes = exclude_to_excludes(exclude)
-    if excludes:
-        logger.warning("--exclude is ignored in do_update()")
-    prerelease_excludes = exclude_to_excludes(prerelease_exclude)
-    excluded_wheel_filenames = exclude_to_excludes(excluded_wheel_filename)
+    if package_inclusion_checker.has_rules():
+        logger.warning("package filter rules are ignored in do_update()")
     syncer = get_syncer(
         basedir, local_db, sync_packages, shadowmire_upstream, use_pypi_index
     )
-    syncer.do_update(package_name, prerelease_excludes, excluded_wheel_filenames)
+    syncer.do_update(package_name, file_inclusion_checker)
 
 
 @cli.command(help="Manual remove given package for debugging purpose")
@@ -1632,16 +1696,15 @@ def do_remove(
     ctx: click.Context,
     sync_packages: bool,
     shadowmire_upstream: Optional[str],
-    exclude: tuple[str],
-    prerelease_exclude: tuple[str],
-    excluded_wheel_filename: tuple[str],
+    package_inclusion_checker: PackageInclusionChecker,
+    file_inclusion_checker: FileInclusionChecker,
     use_pypi_index: bool,
     package_name: str,
 ) -> None:
     basedir = ctx.obj["basedir"]
     local_db = ctx.obj["local_db"]
-    if exclude or prerelease_exclude or excluded_wheel_filename:
-        logger.warning("exclusion rules are ignored in do_remove()")
+    if package_inclusion_checker.has_rules() or file_inclusion_checker.has_rules():
+        logger.warning("package or file filter rules are ignored in do_remove()")
     syncer = get_syncer(
         basedir, local_db, sync_packages, shadowmire_upstream, use_pypi_index
     )
