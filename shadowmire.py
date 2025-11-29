@@ -25,6 +25,7 @@ from copy import deepcopy
 import functools
 from http.client import HTTPConnection
 import socket
+from datetime import datetime, timedelta, timezone
 
 import requests
 import click
@@ -539,13 +540,21 @@ class FileInclusionChecker:
         prerelease_exclude: tuple[str],
         excluded_wheel_filename: tuple[str],
         filter_meta: bool,
+        skip_yanked: bool,
+        skip_old_packages_days: Optional[int] = None,
     ) -> None:
         self.prerelease_excludes = compile_regexes(prerelease_exclude)
         self.excluded_wheel_filenames = compile_regexes(excluded_wheel_filename)
         self.filter_meta = filter_meta
+        self.skip_yanked = skip_yanked
+        self.skip_old_packages_days = skip_old_packages_days
 
     def has_rules(self):
-        return bool(self.prerelease_excludes or self.excluded_wheel_filenames)
+        return bool(
+            self.prerelease_excludes
+            or self.excluded_wheel_filenames
+            or self.skip_yanked
+        )
 
     def get_filtered_meta(self, package_name: str, meta: dict) -> dict:
         """
@@ -558,12 +567,38 @@ class FileInclusionChecker:
             new_meta = meta
         else:
             new_meta = deepcopy(meta)
-        meta_filters(
-            new_meta,
-            package_name,
-            self.prerelease_excludes,
-            self.excluded_wheel_filenames,
-        )
+
+        if match_patterns(package_name, self.prerelease_excludes):
+            for release in list(new_meta["releases"].keys()):
+                if match_patterns(release, PRERELEASE_PATTERNS):
+                    del new_meta["releases"][release]
+        if self.excluded_wheel_filenames:
+            for release_infos in new_meta["releases"].values():
+                for release_idx in range(len(release_infos) - 1, -1, -1):
+                    release_info = release_infos[release_idx]
+                    filename = release_info["filename"]
+                    if match_patterns(filename, self.excluded_wheel_filenames):
+                        del release_infos[release_idx]
+        if self.skip_yanked:
+            for release_infos in new_meta["releases"].values():
+                for release_idx in range(len(release_infos) - 1, -1, -1):
+                    release_info = release_infos[release_idx]
+                    if release_info.get("yanked", False):
+                        del release_infos[release_idx]
+        if self.skip_old_packages_days is not None:
+            threshold_date = datetime.now(timezone.utc) - timedelta(
+                days=self.skip_old_packages_days
+            )
+            for release_infos in new_meta["releases"].values():
+                for release_idx in range(len(release_infos) - 1, -1, -1):
+                    release_info = release_infos[release_idx]
+                    upload_time_str = release_info.get("upload_time_iso_8601", None)
+                    if upload_time_str is None:
+                        continue
+                    upload_time = datetime.fromisoformat(upload_time_str)
+                    if upload_time < threshold_date:
+                        del release_infos[release_idx]
+
         return new_meta
 
 
@@ -952,55 +987,6 @@ def download(
     return True, resp
 
 
-def filter_release_from_meta(
-    meta: dict, patterns: list[re.Pattern[str]] | tuple[re.Pattern[str], ...]
-) -> bool:
-    """
-    Returns True if meta changes, False otherwise.
-    """
-    changed = False
-    for release in list(meta["releases"].keys()):
-        if match_patterns(release, patterns):
-            del meta["releases"][release]
-            changed = True
-    return changed
-
-
-def filter_wheel_file_from_meta(
-    meta: dict, patterns: list[re.Pattern[str]] | tuple[re.Pattern[str], ...]
-) -> bool:
-    """
-    Returns True if meta changes, False otherwise.
-    """
-    changed = False
-    for release_infos in meta["releases"].values():
-        for release_idx in range(len(release_infos) - 1, -1, -1):
-            release_info = release_infos[release_idx]
-            filename = release_info["filename"]
-            if match_patterns(filename, patterns):
-                del release_infos[release_idx]
-                changed = True
-    return changed
-
-
-def meta_filters(
-    meta: dict,
-    package_name: str,
-    prerelease_excludes: list[re.Pattern[str]],
-    excluded_wheel_filenames: list[re.Pattern[str]],
-):
-    """
-    Apply filters to the package meta.
-    Returns True if meta changes, False otherwise.
-    """
-    changed = False
-    if match_patterns(package_name, prerelease_excludes):
-        changed |= filter_release_from_meta(meta, PRERELEASE_PATTERNS)
-    if excluded_wheel_filenames:
-        changed |= filter_wheel_file_from_meta(meta, excluded_wheel_filenames)
-    return changed
-
-
 class SyncPyPI(SyncBase):
     def __init__(
         self, basedir: Path, local_db: LocalVersionKV, sync_packages: bool = False
@@ -1289,7 +1275,7 @@ def sync_shared_args(func: Callable[..., Any]) -> Callable[..., Any]:
         click.option(
             "--use-pypi-index/--no-use-pypi-index",
             default=False,
-            help="Always use PyPI index metadata (via XMLRPC). It's no-op without --shadowmire-upstream. Some packages might not be downloaded successfully.",
+            help="Always use PyPI index metadata (via XMLRPC). It's no-op without --shadowmire-upstream. Some packages might not be downloaded successfully. Defaults to false.",
         ),
         click.option(
             "--exclude", multiple=True, help="Remote package names to exclude. Regex."
@@ -1310,9 +1296,20 @@ def sync_shared_args(func: Callable[..., Any]) -> Callable[..., Any]:
             help="Specify patterns to exclude wheel files (applies to all packages). Regex.",
         ),
         click.option(
-            "--filter-metadata",
+            "--filter-metadata/--no-filter-metadata",
             default=True,
-            help="Whether to modify each package's metadata according to release and file filtering rules.",
+            help="Whether to modify each package's metadata according to release and file filtering rules. Defaults to true.",
+        ),
+        click.option(
+            "--skip-yanked/--no-skip-yanked",
+            default=False,
+            help="Whether to skip yanked release files when syncing packages. Defaults to false.",
+        ),
+        click.option(
+            "--skip-old-packages-days",
+            default=None,
+            type=int,
+            help="Skip packages whose upload time is earlier than specified days. Defaults to None (do not skip any).",
         ),
     ]
 
@@ -1327,6 +1324,8 @@ def sync_shared_args(func: Callable[..., Any]) -> Callable[..., Any]:
             prerelease_exclude=kwargs.pop("prerelease_exclude"),
             excluded_wheel_filename=kwargs.pop("excluded_wheel_filename"),
             filter_meta=kwargs.pop("filter_metadata"),
+            skip_yanked=kwargs.pop("skip_yanked"),
+            skip_old_packages_days=kwargs.pop("skip_old_packages_days"),
         )
         kwargs["package_inclusion_checker"] = package_inclusion_checker
         kwargs["file_inclusion_checker"] = file_inclusion_checker
