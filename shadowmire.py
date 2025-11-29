@@ -554,6 +554,7 @@ class FileInclusionChecker:
             self.prerelease_excludes
             or self.excluded_wheel_filenames
             or self.skip_yanked
+            or self.skip_old_packages_days is not None
         )
 
     def get_filtered_meta(self, package_name: str, meta: dict) -> dict:
