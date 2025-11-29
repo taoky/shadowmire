@@ -585,12 +585,11 @@ class SyncBase:
     def filter_remote(
         self, remote: dict[str, int], package_inclusion_checker: PackageInclusionChecker
     ) -> dict[str, int]:
-        if not excludes:
+        if not package_inclusion_checker.has_rules():
             return remote
         res = {}
         for k, v in remote.items():
-            matched = match_patterns(k, excludes)
-            if not matched:
+            if package_inclusion_checker.is_included(k):
                 res[k] = v
         return res
 
@@ -691,9 +690,7 @@ class SyncBase:
             try:
                 with open(json_meta_path, "r") as f:
                     meta = json.load(f)
-                meta_filters(
-                    meta, package_name, prerelease_excludes, excluded_wheel_filenames
-                )
+                meta = file_inclusion_checker.get_filtered_meta(package_name, meta)
                 release_files = PyPI.get_release_files_from_meta(meta)
                 hrefs_from_meta = {
                     PyPI.file_url_to_local_url(i["url"]) for i in release_files
@@ -1036,9 +1033,8 @@ class SyncPyPI(SyncBase):
         package_simple_path = self.simple_dir / package_name
         package_simple_path.mkdir(exist_ok=True)
         try:
-            meta = self.get_package_metadata(package_name)
-            meta_original = deepcopy(meta)
-            logger.debug("%s meta: %s", package_name, meta)
+            meta_original = self.get_package_metadata(package_name)
+            logger.debug("%s meta: %s", package_name, meta_original)
         except PackageNotFoundError:
             if (
                 self.remote_packages is not None
@@ -1074,7 +1070,7 @@ class SyncPyPI(SyncBase):
             return None
 
         # filter prerelease and wheel files, if necessary
-        meta_filters(meta, package_name, prerelease_excludes, excluded_wheel_filenames)
+        meta = file_inclusion_checker.get_filtered_meta(package_name, meta_original)
 
         if self.sync_packages:
             # sync packages first, then sync index
@@ -1199,11 +1195,11 @@ class SyncPlainHTTP(SyncBase):
             existing_hrefs = [] if hrefs is None else hrefs
         # Download JSON meta
         try:
-            meta = self.get_package_metadata(package_name)
+            meta_original = self.get_package_metadata(package_name)
         except PackageNotFoundError:
             return None
         # filter prerelease and wheel files, if necessary
-        meta_filters(meta, package_name, prerelease_excludes, excluded_wheel_filenames)
+        meta = file_inclusion_checker.get_filtered_meta(package_name, meta_original)
 
         if self.sync_packages:
             release_files = PyPI.get_release_files_from_meta(meta)
@@ -1250,7 +1246,7 @@ class SyncPlainHTTP(SyncBase):
             self.jsonmeta_dir / package_name
         )
         # generate indexes
-        self.write_meta_to_simple(package_simple_path, meta)
+        self.write_meta_to_simple(package_simple_path, meta_original)
 
         last_serial: int = meta["last_serial"]
         if use_db:
