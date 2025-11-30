@@ -1,12 +1,20 @@
 [options]
 # repo = "/example/path"
+
+# Note that by default sync_packages is false
 sync_packages = true
 # shadowmire_upstream = "http://example.com/pypi/web/"
 # use_pypi_index = true
+
 exclude = [
     "^[a-z]"
 ]
+# When include has values, exclude is ignored
+include = []
 prerelease_exclude = [
     ".+"
 ]
 excluded_wheel_filename = []
+skip_yanked = false
+# skip_old_packages_days = 1095
+filter_metadata = true
