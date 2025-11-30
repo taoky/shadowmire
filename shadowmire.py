@@ -517,7 +517,7 @@ class PackageInclusionChecker:
         self.excludes = compile_regexes(exclude)
         self.includes = compile_regexes(include)
 
-    def has_rules(self):
+    def has_rules(self) -> bool:
         return bool(self.excludes or self.includes)
 
     def is_included(self, package_name: str) -> bool:
@@ -532,7 +532,13 @@ class PackageInclusionChecker:
 
 class FileInclusionChecker:
     """
-    A class for handling releases/file inclusion/exclusion based on regex patterns.
+    A class for filtering package releases and files based on various criteria.
+
+    - prerelease_exclude: regex patterns for package names whose prereleases will be excluded
+    - excluded_wheel_filename: regex patterns for wheel filenames to be excluded
+    - filter_meta: whether to modify metadata in place or return a filtered copy
+    - skip_yanked: whether to skip yanked files
+    - skip_old_packages_days: if set, skip files older than this number of days
     """
 
     def __init__(
@@ -549,7 +555,7 @@ class FileInclusionChecker:
         self.skip_yanked = skip_yanked
         self.skip_old_packages_days = skip_old_packages_days
 
-    def has_rules(self):
+    def has_rules(self) -> bool:
         return bool(
             self.prerelease_excludes
             or self.excluded_wheel_filenames
@@ -1094,10 +1100,6 @@ class SyncPyPI(SyncBase):
         self.write_meta_to_simple(package_simple_path, meta)
         json_meta_path = self.jsonmeta_dir / package_name
         with overwrite(json_meta_path) as f:
-            # Note that we're writing meta_original here!
-            # This is also the case for SyncPlainHTTP.
-            # When syncing, we want to keep the original meta (json/),
-            # but index.v1_json and index.v1_html are generated from modified meta.
             json.dump(meta_original, f)
 
         if use_db:
@@ -1276,25 +1278,25 @@ def sync_shared_args(func: Callable[..., Any]) -> Callable[..., Any]:
         click.option(
             "--use-pypi-index/--no-use-pypi-index",
             default=False,
-            help="Always use PyPI index metadata (via XMLRPC). It's no-op without --shadowmire-upstream. Some packages might not be downloaded successfully. Defaults to false.",
+            help="Always use PyPI index metadata (via XMLRPC). It's a no-op without --shadowmire-upstream. Some packages might not be downloaded successfully. Defaults to false.",
         ),
         click.option(
-            "--exclude", multiple=True, help="Remote package names to exclude. Regex."
+            "--exclude", multiple=True, help="Remote package names to exclude (regex patterns)."
         ),
         click.option(
             "--include",
             multiple=True,
-            help="Only include these remote package names. Regex. If set --exclude is ignored.",
+            help="Only include these remote package names (regex patterns). If set --exclude is ignored.",
         ),
         click.option(
             "--prerelease-exclude",
             multiple=True,
-            help="Package names of which prereleases will be excluded. Regex.",
+            help="Package names of which prereleases will be excluded (regex patterns).",
         ),
         click.option(
             "--excluded-wheel-filename",
             multiple=True,
-            help="Specify patterns to exclude wheel files (applies to all packages). Regex.",
+            help="Specify patterns to exclude wheel files (applies to all packages, regex patterns).",
         ),
         click.option(
             "--filter-metadata/--no-filter-metadata",
@@ -1310,7 +1312,7 @@ def sync_shared_args(func: Callable[..., Any]) -> Callable[..., Any]:
             "--skip-old-packages-days",
             default=None,
             type=int,
-            help="Skip packages whose upload time is earlier than specified days. Defaults to None (do not skip any).",
+            help="Skip files whose upload time is earlier than specified days. Defaults to None (do not skip any).",
         ),
     ]
 
