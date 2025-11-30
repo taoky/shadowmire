@@ -18,3 +18,4 @@ excluded_wheel_filename = []
 skip_yanked = false
 # skip_old_packages_days = 1095
 filter_metadata = true
+least_releases_to_keep = 0

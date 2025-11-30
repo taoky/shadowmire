@@ -532,13 +532,12 @@ class PackageInclusionChecker:
 
 class FileInclusionChecker:
     """
-    A class for filtering package releases and files based on various criteria.
+    A class for filtering package releases and files based on various criteria:
 
-    - prerelease_exclude: regex patterns for package names whose prereleases will be excluded
-    - excluded_wheel_filename: regex patterns for wheel filenames to be excluded
-    - filter_meta: whether to modify metadata in place or return a filtered copy
-    - skip_yanked: whether to skip yanked files
-    - skip_old_packages_days: if set, skip files older than this number of days
+    - Shall this package exclude pre-releases?
+    - Is this file excluded by given filename patterns?
+    - Is this release yanked?
+    - Is this release too old?
     """
 
     def __init__(
@@ -547,7 +546,8 @@ class FileInclusionChecker:
         excluded_wheel_filename: tuple[str],
         filter_meta: bool,
         skip_yanked: bool,
-        skip_old_packages_days: Optional[int] = None,
+        skip_old_packages_days: Optional[int],
+        least_releases_to_keep: int,
     ) -> None:
         self.prerelease_excludes = compile_regexes(prerelease_exclude)
         self.excluded_wheel_filenames = compile_regexes(excluded_wheel_filename)
@@ -557,6 +557,7 @@ class FileInclusionChecker:
         # Treat 0 as None...
         if self.skip_old_packages_days == 0:
             self.skip_old_packages_days = None
+        self.least_releases_to_keep = least_releases_to_keep
 
     def has_rules(self) -> bool:
         return bool(
@@ -595,11 +596,13 @@ class FileInclusionChecker:
                     release_info = release_infos[release_idx]
                     if release_info.get("yanked", False):
                         del release_infos[release_idx]
+        removed_old_release_infos: dict[str, list[tuple[datetime, dict]]] = {}
         if self.skip_old_packages_days is not None:
             threshold_date = datetime.now(timezone.utc) - timedelta(
                 days=self.skip_old_packages_days
             )
-            for release_infos in new_meta["releases"].values():
+            releases = new_meta["releases"]
+            for release, release_infos in releases.items():
                 for release_idx in range(len(release_infos) - 1, -1, -1):
                     release_info = release_infos[release_idx]
                     upload_time_str = release_info.get("upload_time_iso_8601", None)
@@ -607,7 +610,30 @@ class FileInclusionChecker:
                         continue
                     upload_time = datetime.fromisoformat(upload_time_str)
                     if upload_time < threshold_date:
+                        removed_old_release_infos.setdefault(release, []).append(
+                            (upload_time, release_info)
+                        )
                         del release_infos[release_idx]
+            if self.least_releases_to_keep > 0:
+                remaining_releases = sum(1 for infos in releases.values() if infos)
+                missing = self.least_releases_to_keep - remaining_releases
+                if missing > 0:
+                    # Re-add the newest releases that were removed due to age.
+                    candidates: list[tuple[datetime, str]] = []
+                    for release, removed_infos in removed_old_release_infos.items():
+                        release_infos = releases.get(release)
+                        if release_infos is None or release_infos:
+                            continue
+                        latest_upload = max(ts for ts, _ in removed_infos)
+                        candidates.append((latest_upload, release))
+                    candidates.sort(reverse=True)
+                    for _, release in candidates[:missing]:
+                        release_infos = releases.get(release)
+                        if release_infos is None:
+                            continue
+                        to_restore = removed_old_release_infos.get(release, [])
+                        for _, info in sorted(to_restore, key=lambda x: x[0]):
+                            release_infos.append(info)
 
         return new_meta
 
@@ -1284,7 +1310,9 @@ def sync_shared_args(func: Callable[..., Any]) -> Callable[..., Any]:
             help="Always use PyPI index metadata (via XMLRPC). It's a no-op without --shadowmire-upstream. Some packages might not be downloaded successfully. Defaults to false.",
         ),
         click.option(
-            "--exclude", multiple=True, help="Remote package names to exclude (regex patterns)."
+            "--exclude",
+            multiple=True,
+            help="Remote package names to exclude (regex patterns).",
         ),
         click.option(
             "--include",
@@ -1317,6 +1345,12 @@ def sync_shared_args(func: Callable[..., Any]) -> Callable[..., Any]:
             type=int,
             help="Skip files whose upload time is earlier than specified days. Defaults to None (do not skip any).",
         ),
+        click.option(
+            "--least-releases-to-keep",
+            default=0,
+            type=int,
+            help="If --skip-old-packages-days ignores too many releases, at least keep this many latest releases while respecting other rules. Defaults to 0 (do not enforce).",
+        ),
     ]
 
     @functools.wraps(func)
@@ -1332,6 +1366,7 @@ def sync_shared_args(func: Callable[..., Any]) -> Callable[..., Any]:
             filter_meta=kwargs.pop("filter_metadata"),
             skip_yanked=kwargs.pop("skip_yanked"),
             skip_old_packages_days=kwargs.pop("skip_old_packages_days"),
+            least_releases_to_keep=kwargs.pop("least_releases_to_keep"),
         )
         kwargs["package_inclusion_checker"] = package_inclusion_checker
         kwargs["file_inclusion_checker"] = file_inclusion_checker
