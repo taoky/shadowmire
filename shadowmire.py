@@ -554,6 +554,9 @@ class FileInclusionChecker:
         self.filter_meta = filter_meta
         self.skip_yanked = skip_yanked
         self.skip_old_packages_days = skip_old_packages_days
+        # Treat 0 as None...
+        if self.skip_old_packages_days == 0:
+            self.skip_old_packages_days = None
 
     def has_rules(self) -> bool:
         return bool(
