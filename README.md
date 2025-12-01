@@ -6,6 +6,7 @@ Requires Python 3.11+.
 
 ## Breaking Changes
 
+- [2025-11-30] ([TODO](#TODO)): Now by default the JSON API files written would have filtered out files not synced. It's now controlled by `--filter-metadata/--no-filter-metadata` argument (defaults to `--filter-metadata`).
 - [2025-06-29] ([8ad920e](https://github.com/taoky/shadowmire/commit/8ad920ee82e34de49bbaa37109d1233bbe604634)): Regex pattern matching now uses `re.search()` instead of `re.match()`. Please check `exclude` and `prerelease_exclude` rules if you are using them. For example, `[a-z]` matches any package name that contains a lowercase letter, instead of only matching package names that start with a lowercase letter.
 
 ## Docs
