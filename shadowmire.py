@@ -1317,7 +1317,7 @@ def sync_shared_args(func: Callable[..., Any]) -> Callable[..., Any]:
         click.option(
             "--include",
             multiple=True,
-            help="Only include these remote package names (regex patterns). If set --exclude is ignored.",
+            help="Only include these remote package names (regex patterns). If set, --exclude is ignored.",
         ),
         click.option(
             "--prerelease-exclude",
@@ -1343,7 +1343,7 @@ def sync_shared_args(func: Callable[..., Any]) -> Callable[..., Any]:
             "--skip-old-packages-days",
             default=None,
             type=int,
-            help="Skip files whose upload time is earlier than specified days. Defaults to None (do not skip any).",
+            help="Skip files whose upload time is earlier than the specified number of days. Defaults to None (do not skip any).",
         ),
         click.option(
             "--least-releases-to-keep",
