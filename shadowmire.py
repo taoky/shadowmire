@@ -362,6 +362,24 @@ class PyPI:
             raise PackageNotFoundError
         return req.json()  # type: ignore
 
+    def get_package_simple(self, package_name: str) -> dict:
+        # Based on PEP 691
+        headers = {"Accept": "application/vnd.pypi.simple.v1+json"}
+        req = self.session.get(
+            urljoin(self.host, f"simple/{package_name}/"), headers=headers
+        )
+        # For incorrectly configured shadowmire mirrors that do not return correct content-type
+        # Not need for dealing with application/vnd.pypi.simple.v1+html or text/html
+        # Because most of them do not support PEP 658 so we don't need this
+        if req.headers.get("Content-Type", "") != "application/vnd.pypi.simple.v1+json":
+            logger.warning("upstream simple api did not return correct content-type, fallback to v1_json")
+            req = self.session.get(
+                urljoin(self.host, f"simple/{package_name}/index.v1_json"), headers=headers
+            )
+        if req.status_code == 404:
+            raise PackageNotFoundError
+        return req.json()  # type: ignore
+
     @staticmethod
     def get_release_files_from_meta(package_meta: dict) -> list[dict]:
         release_files = []
@@ -426,6 +444,17 @@ class PyPI:
                 else:
                     file_tags += ' data-yanked=""'
 
+            # data-metadata: digest_name (sha256)
+            if "core-metadata" in release and release["core-metadata"]:
+                metadata = release["core-metadata"]
+                if cls.digest_name in metadata and metadata[cls.digest_name]:
+                    file_tags += (
+                        f' data-dist-info-metadata="{cls.digest_name}={html.escape(metadata[cls.digest_name])}"'
+                        f' data-core-metadata="{cls.digest_name}={html.escape(metadata[cls.digest_name])}"'
+                    )
+                else:
+                    file_tags += ' data-dist-info-metadata="true" data-core-metadata="true"'
+
             return file_tags
 
         simple_page_content += "\n".join(
@@ -468,6 +497,8 @@ class PyPI:
         for r in release_files:
             package_json["files"].append(
                 {
+                    "core-metadata": r.get("core-metadata", False),
+                    "data-dist-info-metadata": r.get("core-metadata", False),
                     "filename": r["filename"],
                     "hashes": {
                         cls.digest_name: r["digests"][cls.digest_name],
@@ -718,6 +749,32 @@ class SyncBase:
     def get_package_metadata(self, package_name: str) -> dict:
         raise NotImplementedError
 
+    def get_package_simple(self, package_name: str) -> dict:
+        raise NotImplementedError
+
+    def merge_simple_info_into_metadata(self, metadata: dict, simple: dict) -> dict:
+        """
+        Merge simple API info into package metadata for PEP 658 implementation.
+        """
+        simple_files = simple.get("files", [])
+        if not simple_files:
+            return metadata
+
+        simple_file_map = {f["filename"]: f for f in simple_files}
+        for release_files in metadata.get("releases", {}).values():
+            for release_file in release_files:
+                filename = release_file.get("filename")
+                if filename in simple_file_map:
+                    simple_file_info = simple_file_map[filename]
+                    # Add core metadata hash if available
+                    release_file["core-metadata"] = simple_file_info.get(
+                        "core-metadata",
+                        # Fallback for legacy PEP 714 attribute
+                        simple_file_info.get("data-dist-info-metadata", False),
+                    )
+
+        return metadata
+
     def check_and_update(
         self,
         package_names: list[str],
@@ -908,6 +965,10 @@ class SyncBase:
                 if p.exists():
                     p.unlink()
                     logger.info("Removed file %s", p)
+                mp = p.with_name(p.name + ".metadata")
+                if mp.exists():
+                    mp.unlink()
+                    logger.info("Removed metadata file %s", mp)
         remove_dir_with_files(package_simple_dir)
         metajson_path = self.jsonmeta_dir / package_name
         metajson_path.unlink(missing_ok=True)
@@ -1045,6 +1106,9 @@ class SyncPyPI(SyncBase):
     def get_package_metadata(self, package_name: str) -> dict:
         return self.pypi.get_package_metadata(package_name)
 
+    def get_package_simple(self, package_name: str) -> dict:
+        return self.pypi.get_package_simple(package_name)
+
     def do_update(
         self,
         package_name: str,
@@ -1056,6 +1120,11 @@ class SyncPyPI(SyncBase):
         package_simple_path.mkdir(exist_ok=True)
         try:
             meta_original = self.get_package_metadata(package_name)
+            try:
+                simple = self.get_package_simple(package_name)
+                meta_original = self.merge_simple_info_into_metadata(meta_original, simple)
+            except PackageNotFoundError:
+                pass
             logger.debug("%s meta: %s", package_name, meta_original)
         except PackageNotFoundError:
             if (
@@ -1107,6 +1176,9 @@ class SyncPyPI(SyncBase):
                 logger.info("removing file %s (if exists)", p)
                 package_path = Path(normpath(package_simple_path / p))
                 package_path.unlink(missing_ok=True)
+                # Also remove associated metadata file
+                metadata_path = package_path.with_name(package_path.name + ".metadata")
+                metadata_path.unlink(missing_ok=True)
             for i in release_files:
                 url = i["url"]
                 dest = Path(
@@ -1123,6 +1195,17 @@ class SyncPyPI(SyncBase):
                 if not success:
                     logger.warning("skipping %s as it fails downloading", package_name)
                     return None
+
+                # PEP 658: Download metadata file if available
+                if i.get("core-metadata", False):
+                    m_url = url + ".metadata"
+                    m_dest = dest.with_name(dest.name + ".metadata")
+                    logger.info("downloading metadata %s -> %s", m_url, m_dest)
+                    m_success, m_resp = download(
+                        self.session, m_url, m_dest
+                    )
+                    if not m_success:
+                        logger.warning("ignoring %s metadata as it fails downloading", package_name)
 
         last_serial: int = meta["last_serial"]
 
@@ -1199,6 +1282,24 @@ class SyncPlainHTTP(SyncBase):
         assert resp
         return resp.json()
 
+    def get_package_simple(self, package_name: str) -> dict:
+        # Use shadowmire static file first for less consumption
+        req = self.session.get(
+            urljoin(self.upstream, f"simple/{package_name}/index.v1_json")
+        )
+        if req.status_code == 404:
+            # Fallback to PyPI api if possible
+            headers = {"Accept": "application/vnd.pypi.simple.v1+json"}
+            req = self.session.get(
+                urljoin(self.upstream, f"simple/{package_name}/index.v1_json"),
+                headers=headers,
+            )
+            if req.headers.get("Content-Type", "") != "application/vnd.pypi.simple.v1+json":
+                raise PackageNotFoundError
+        if req.status_code == 404:
+            raise PackageNotFoundError
+        return req.json()  # type: ignore
+
     def do_update(
         self,
         package_name: str,
@@ -1216,6 +1317,11 @@ class SyncPlainHTTP(SyncBase):
             meta_original = self.get_package_metadata(package_name)
         except PackageNotFoundError:
             return None
+        try:
+            simple = self.get_package_simple(package_name)
+            meta_original = self.merge_simple_info_into_metadata(meta_original, simple)
+        except PackageNotFoundError:
+            pass
         # filter prerelease and wheel files, if necessary
         meta = file_inclusion_checker.get_filtered_meta(package_name, meta_original)
 
@@ -1228,6 +1334,9 @@ class SyncPlainHTTP(SyncBase):
                 logger.info("removing file %s (if exists)", p)
                 package_path = Path(normpath(package_simple_path / p))
                 package_path.unlink(missing_ok=True)
+                # Also remove associated metadata file
+                metadata_path = package_path.with_name(package_path.name + ".metadata")
+                metadata_path.unlink(missing_ok=True)
             package_simple_url = urljoin(self.upstream, f"simple/{package_name}/")
             for i in release_files:
                 href = PyPI.file_url_to_local_url(i["url"])
@@ -1258,6 +1367,39 @@ class SyncPlainHTTP(SyncBase):
                             "skipping %s as it fails downloading", package_name
                         )
                         return None
+
+                # PEP 658: Download metadata file if available
+                if i.get("core-metadata", False):
+                    # Try from upstream first, then fallback to PyPI if needed
+                    m_url = url + ".metadata"
+                    m_dest = dest.with_name(dest.name + ".metadata")
+                    logger.info("downloading metadata %s -> %s", m_url, m_dest)
+                    m_success, m_resp = download(self.session, m_url, m_dest)
+                    if not m_success:
+                        logger.warning(
+                            "ignoring %s metadata as it fails downloading", package_name
+                        )
+
+                    if not m_success:
+                        if m_resp and m_resp.status_code == 404:
+                            pypi_metadata_url = i["url"] + ".metadata"
+                            logger.warning(
+                                "cannot found metadata %s at upstream, fallback to pypi",
+                                m_url,
+                            )
+                            m_success, m_resp = download(
+                                self.session, pypi_metadata_url, m_dest
+                            )
+                            if not m_success:
+                                logger.warning(
+                                    "ignoring %s metadata as it fails downloading (from pypi)",
+                                    package_name,
+                                )
+                        else:
+                            logger.warning(
+                                "ignoring %s metadata as it fails downloading",
+                                package_name,
+                            )
 
         # OK, now it's safe to rename
         (self.jsonmeta_dir / (package_name + ".new")).rename(
@@ -1662,6 +1804,12 @@ def verify(
                 np = normpath(sd / i)
                 logger.debug("add to ref_set: %s", np)
                 nps.append(np)
+                # also add metadata file to reference set if it exists
+                metadata_path = Path(np + ".metadata")
+                if metadata_path.exists():
+                    metadata_np = str(metadata_path)
+                    logger.debug("add to ref_set: %s", metadata_np)
+                    nps.append(metadata_np)
             return nps
 
         # MyPy does not enjoy same variable name with different types, even when --allow-redefinition
