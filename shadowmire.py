@@ -369,7 +369,7 @@ class PyPI:
             urljoin(self.host, f"simple/{package_name}/"), headers=headers
         )
         # For incorrectly configured shadowmire mirrors that do not return correct content-type
-        # Not need for dealing with application/vnd.pypi.simple.v1+html or text/html
+        # No need for dealing with application/vnd.pypi.simple.v1+html or text/html
         # Because most of them do not support PEP 658 so we don't need this
         if req.headers.get("Content-Type", "") != "application/vnd.pypi.simple.v1+json":
             logger.warning("upstream simple api did not return correct content-type, fallback to v1_json")
@@ -1124,6 +1124,7 @@ class SyncPyPI(SyncBase):
                 simple = self.get_package_simple(package_name)
                 meta_original = self.merge_simple_info_into_metadata(meta_original, simple)
             except PackageNotFoundError:
+                # Some mirrors may not implement PEP 691 simple API, just go ahead
                 pass
             logger.debug("%s meta: %s", package_name, meta_original)
         except PackageNotFoundError:
@@ -1291,7 +1292,7 @@ class SyncPlainHTTP(SyncBase):
             # Fallback to PyPI api if possible
             headers = {"Accept": "application/vnd.pypi.simple.v1+json"}
             req = self.session.get(
-                urljoin(self.upstream, f"simple/{package_name}/index.v1_json"),
+                urljoin(self.upstream, f"simple/{package_name}/"),
                 headers=headers,
             )
             if req.headers.get("Content-Type", "") != "application/vnd.pypi.simple.v1+json":
@@ -1321,6 +1322,7 @@ class SyncPlainHTTP(SyncBase):
             simple = self.get_package_simple(package_name)
             meta_original = self.merge_simple_info_into_metadata(meta_original, simple)
         except PackageNotFoundError:
+            # Some mirrors may not implement PEP 691 simple API, just go ahead
             pass
         # filter prerelease and wheel files, if necessary
         meta = file_inclusion_checker.get_filtered_meta(package_name, meta_original)
@@ -1376,19 +1378,14 @@ class SyncPlainHTTP(SyncBase):
                     logger.info("downloading metadata %s -> %s", m_url, m_dest)
                     m_success, m_resp = download(self.session, m_url, m_dest)
                     if not m_success:
-                        logger.warning(
-                            "ignoring %s metadata as it fails downloading", package_name
-                        )
-
-                    if not m_success:
                         if m_resp and m_resp.status_code == 404:
-                            pypi_metadata_url = i["url"] + ".metadata"
+                            pypi_m_url = i["url"] + ".metadata"
                             logger.warning(
-                                "cannot found metadata %s at upstream, fallback to pypi",
+                                "cannot find metadata %s at upstream, fallback to pypi",
                                 m_url,
                             )
                             m_success, m_resp = download(
-                                self.session, pypi_metadata_url, m_dest
+                                self.session, pypi_m_url, m_dest
                             )
                             if not m_success:
                                 logger.warning(
@@ -1397,8 +1394,7 @@ class SyncPlainHTTP(SyncBase):
                                 )
                         else:
                             logger.warning(
-                                "ignoring %s metadata as it fails downloading",
-                                package_name,
+                                "ignoring %s metadata as it fails downloading", package_name
                             )
 
         # OK, now it's safe to rename
