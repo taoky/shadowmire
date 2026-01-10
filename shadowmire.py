@@ -368,14 +368,11 @@ class PyPI:
         req = self.session.get(
             urljoin(self.host, f"simple/{package_name}/"), headers=headers
         )
-        # For incorrectly configured shadowmire mirrors that do not return correct content-type
+        # For incorrectly configured mirrors that do not return correct content-type
         # No need for dealing with application/vnd.pypi.simple.v1+html or text/html
         # Because most of them do not support PEP 658 so we don't need this
         if req.headers.get("Content-Type", "") != "application/vnd.pypi.simple.v1+json":
-            logger.warning("upstream simple api did not return correct content-type, fallback to v1_json")
-            req = self.session.get(
-                urljoin(self.host, f"simple/{package_name}/index.v1_json"), headers=headers
-            )
+            raise PackageNotFoundError
         if req.status_code == 404:
             raise PackageNotFoundError
         return req.json()  # type: ignore
