@@ -408,7 +408,7 @@ class PyPI:
 
     # Func modified from bandersnatch
     @classmethod
-    def generate_html_simple_page(cls, package_meta: dict) -> str:
+    def generate_html_simple_page(cls, package_meta: dict, core_metadata_map: dict) -> str:
         package_rawname = package_meta["info"]["name"]
         simple_page_content = (
             "<!DOCTYPE html>\n"
@@ -442,8 +442,8 @@ class PyPI:
                     file_tags += ' data-yanked=""'
 
             # data-metadata: digest_name (sha256)
-            if "core-metadata" in release and release["core-metadata"]:
-                metadata = release["core-metadata"]
+            if core_metadata_map.get(release["filename"], False):
+                metadata = core_metadata_map[release["filename"]]
                 if cls.digest_name in metadata and metadata[cls.digest_name]:
                     file_tags += (
                         f' data-dist-info-metadata="{cls.digest_name}={html.escape(metadata[cls.digest_name])}"'
@@ -475,7 +475,7 @@ class PyPI:
 
     # Func modified from bandersnatch
     @classmethod
-    def generate_json_simple_page(cls, package_meta: dict) -> str:
+    def generate_json_simple_page(cls, package_meta: dict, core_metadata_map: dict) -> str:
         package_json: dict[str, Any] = {
             "files": [],
             "meta": {
@@ -494,8 +494,8 @@ class PyPI:
         for r in release_files:
             package_json["files"].append(
                 {
-                    "core-metadata": r.get("core-metadata", False),
-                    "data-dist-info-metadata": r.get("core-metadata", False),
+                    "core-metadata": core_metadata_map.get(r["filename"], False),
+                    "data-dist-info-metadata": core_metadata_map.get(r["filename"], False),
                     "filename": r["filename"],
                     "hashes": {
                         cls.digest_name: r["digests"][cls.digest_name],
@@ -749,28 +749,23 @@ class SyncBase:
     def get_package_simple(self, package_name: str) -> dict:
         raise NotImplementedError
 
-    def merge_simple_info_into_metadata(self, metadata: dict, simple: dict) -> dict:
+    def get_core_metadata_map(self, simple: dict) -> dict:
         """
-        Merge simple API info into package metadata for PEP 658 implementation.
+        get a filename to core-metadata map from simple API info for PEP 658 implementation.
         """
-        simple_files = simple.get("files", [])
-        if not simple_files:
-            return metadata
+        files = simple.get("files", [])
+        if not files:
+            return {}
 
-        simple_file_map = {f["filename"]: f for f in simple_files}
-        for release_files in metadata.get("releases", {}).values():
-            for release_file in release_files:
-                filename = release_file.get("filename")
-                if filename in simple_file_map:
-                    simple_file_info = simple_file_map[filename]
-                    # Add core metadata hash if available
-                    release_file["core-metadata"] = simple_file_info.get(
-                        "core-metadata",
-                        # Fallback for legacy PEP 714 attribute
-                        simple_file_info.get("data-dist-info-metadata", False),
-                    )
-
-        return metadata
+        file_map = {
+            f["filename"]: f.get(
+                "core-metadata",
+                # Fallback for legacy PEP 714 attribute
+                f.get("data-dist-info-metadata", False),
+            )
+            for f in files
+        }
+        return file_map
 
     def check_and_update(
         self,
@@ -982,9 +977,9 @@ class SyncBase:
     ) -> Optional[int]:
         raise NotImplementedError
 
-    def write_meta_to_simple(self, package_simple_path: Path, meta: dict) -> None:
-        simple_html_contents = PyPI.generate_html_simple_page(meta)
-        simple_json_contents = PyPI.generate_json_simple_page(meta)
+    def write_meta_to_simple(self, package_simple_path: Path, meta: dict, core_metadata_map: dict) -> None:
+        simple_html_contents = PyPI.generate_html_simple_page(meta, core_metadata_map)
+        simple_json_contents = PyPI.generate_json_simple_page(meta, core_metadata_map)
         for html_filename in ("index.v1_html",):
             html_path = package_simple_path / html_filename
             with overwrite(html_path) as f:
@@ -1152,9 +1147,10 @@ class SyncPyPI(SyncBase):
             self.local_db.set(package_name, -1)
             return None
 
+        core_metadata_map = {}
         try:
             simple = self.get_package_simple(package_name)
-            meta_original = self.merge_simple_info_into_metadata(meta_original, simple)
+            core_metadata_map = self.get_core_metadata_map(simple)
         except PackageNotFoundError:
             # Some mirrors may not implement PEP 691 simple API, just go ahead
             pass
@@ -1195,7 +1191,7 @@ class SyncPyPI(SyncBase):
                     return None
 
                 # PEP 658: Download metadata file if available
-                if i.get("core-metadata", False):
+                if core_metadata_map.get(i["filename"], False):
                     m_url = url + ".metadata"
                     m_dest = dest.with_name(dest.name + ".metadata")
                     logger.info("downloading metadata %s -> %s", m_url, m_dest)
@@ -1207,7 +1203,7 @@ class SyncPyPI(SyncBase):
 
         last_serial: int = meta["last_serial"]
 
-        self.write_meta_to_simple(package_simple_path, meta)
+        self.write_meta_to_simple(package_simple_path, meta, core_metadata_map)
         json_meta_path = self.jsonmeta_dir / package_name
         with overwrite(json_meta_path) as f:
             json.dump(meta_original, f)
@@ -1309,9 +1305,10 @@ class SyncPlainHTTP(SyncBase):
             meta_original = self.get_package_metadata(package_name)
         except PackageNotFoundError:
             return None
+        core_metadata_map = {}
         try:
             simple = self.get_package_simple(package_name)
-            meta_original = self.merge_simple_info_into_metadata(meta_original, simple)
+            core_metadata_map = self.get_core_metadata_map(simple)
         except PackageNotFoundError:
             # Some mirrors may not implement PEP 691 simple API, just go ahead
             pass
@@ -1362,7 +1359,7 @@ class SyncPlainHTTP(SyncBase):
                         return None
 
                 # PEP 658: Download metadata file if available
-                if i.get("core-metadata", False):
+                if core_metadata_map.get(i["filename"], False):
                     # Try from upstream first, then fallback to PyPI if needed
                     m_url = url + ".metadata"
                     m_dest = dest.with_name(dest.name + ".metadata")
@@ -1393,7 +1390,7 @@ class SyncPlainHTTP(SyncBase):
             self.jsonmeta_dir / package_name
         )
         # generate indexes
-        self.write_meta_to_simple(package_simple_path, meta_original)
+        self.write_meta_to_simple(package_simple_path, meta_original, core_metadata_map)
 
         last_serial: int = meta["last_serial"]
         if use_db:
