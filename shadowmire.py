@@ -1120,12 +1120,6 @@ class SyncPyPI(SyncBase):
         package_simple_path.mkdir(exist_ok=True)
         try:
             meta_original = self.get_package_metadata(package_name)
-            try:
-                simple = self.get_package_simple(package_name)
-                meta_original = self.merge_simple_info_into_metadata(meta_original, simple)
-            except PackageNotFoundError:
-                # Some mirrors may not implement PEP 691 simple API, just go ahead
-                pass
             logger.debug("%s meta: %s", package_name, meta_original)
         except PackageNotFoundError:
             if (
@@ -1161,6 +1155,12 @@ class SyncPyPI(SyncBase):
             self.local_db.set(package_name, -1)
             return None
 
+        try:
+            simple = self.get_package_simple(package_name)
+            meta_original = self.merge_simple_info_into_metadata(meta_original, simple)
+        except PackageNotFoundError:
+            # Some mirrors may not implement PEP 691 simple API, just go ahead
+            pass
         # filter prerelease and wheel files, if necessary
         meta = file_inclusion_checker.get_filtered_meta(package_name, meta_original)
 
