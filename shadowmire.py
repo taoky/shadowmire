@@ -1281,22 +1281,16 @@ class SyncPlainHTTP(SyncBase):
         return resp.json()
 
     def get_package_simple(self, package_name: str) -> dict:
-        # Use shadowmire static file first for less consumption
-        req = self.session.get(
-            urljoin(self.upstream, f"simple/{package_name}/index.v1_json")
-        )
-        if req.status_code == 404:
-            # Fallback to PyPI api if possible
-            headers = {"Accept": "application/vnd.pypi.simple.v1+json"}
+        if not self.pypi:
+            # Use shadowmire static file first for less consumption
             req = self.session.get(
-                urljoin(self.upstream, f"simple/{package_name}/"),
-                headers=headers,
+                urljoin(self.upstream, f"simple/{package_name}/index.v1_json")
             )
-            if req.headers.get("Content-Type", "") != "application/vnd.pypi.simple.v1+json":
+            if req.status_code == 404:
                 raise PackageNotFoundError
-        if req.status_code == 404:
-            raise PackageNotFoundError
-        return req.json()  # type: ignore
+            return req.json()  # type: ignore
+        else:
+            return self.pypi.get_package_simple(package_name)
 
     def do_update(
         self,
