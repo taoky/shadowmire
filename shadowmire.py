@@ -224,7 +224,7 @@ def fast_iterdir(
             yield item
 
 
-def get_package_urls_from_index_html(html_path: Path) -> list[str]:
+def get_package_urls_from_index_html(html_path: Path) -> list[tuple[str, bool]]:
     """
     Get all <a> href (fragments removed) from given simple/<package>/index.html contents
     """
@@ -232,37 +232,49 @@ def get_package_urls_from_index_html(html_path: Path) -> list[str]:
     class ATagHTMLParser(HTMLParser):
         def __init__(self) -> None:
             super().__init__()
-            self.hrefs: list[Optional[str]] = []
+            self.data: list[tuple[str, bool]] = []
 
         def handle_starttag(
             self, tag: str, attrs: list[tuple[str, str | None]]
         ) -> None:
             if tag == "a":
+                href = None
+                has_metadata = False
                 for attr in attrs:
                     if attr[0] == "href":
-                        self.hrefs.append(attr[1])
+                        href = attr[1]
+                    if attr[0] == "data-dist-info-metadata":
+                        has_metadata = True
+                    if attr[0] == "data-core-metadata":
+                        has_metadata = True
+                if href:
+                    self.data.append((href, has_metadata))
 
     p = ATagHTMLParser()
     contents = fast_readall(html_path).decode()
     p.feed(contents)
 
     ret = []
-    for href in p.hrefs:
-        if href:
-            parsed_url = urlparse(href)
-            clean_url = urlunparse(parsed_url._replace(fragment=""))
-            ret.append(clean_url)
+    for href, has_metadata in p.data:
+        parsed_url = urlparse(href)
+        clean_url = urlunparse(parsed_url._replace(fragment=""))
+        ret.append((clean_url, has_metadata))
     return ret
 
 
-def get_package_urls_from_index_json(json_path: Path) -> list[str]:
+def get_package_urls_from_index_json(json_path: Path) -> list[tuple[str, bool]]:
     """
     Get all urls from given simple/<package>/index.v1_json contents
     """
     contents = fast_readall(json_path)
     contents_dict = json.loads(contents)
-    urls = [i["url"] for i in contents_dict["files"]]
-    return urls
+    metadata = lambda f: f.get(
+        "core-metadata",
+        # Fallback for legacy PEP 714 attribute
+        f.get("data-dist-info-metadata", False),
+    )
+    ret = [(i["url"], metadata(i)) for i in contents_dict["files"]]
+    return ret
 
 
 def get_package_urls_size_from_index_json(json_path: Path) -> list[tuple[str, int]]:
@@ -277,10 +289,11 @@ def get_package_urls_size_from_index_json(json_path: Path) -> list[tuple[str, in
     return ret
 
 
-def get_existing_hrefs(package_simple_path: Path) -> Optional[list[str]]:
+def get_existing_hrefs(package_simple_path: Path) -> Optional[list[tuple[str, bool]]]:
     """
     There exists packages that have no release files, so when it encounters errors it would return None,
     otherwise empty list or list with hrefs.
+    If the href has its corresponding core metadata, the bool value would set to true.
 
     Priority: index.v1_json -> index.html
     """
@@ -952,15 +965,16 @@ class SyncBase:
             logger.info("Removing package %s", package_name)
         packages_to_remove = get_existing_hrefs(package_simple_dir)
         if remove_packages and packages_to_remove:
-            paths_to_remove = [package_simple_dir / p for p in packages_to_remove]
+            paths_to_remove = []
+            for p, has_metadata in packages_to_remove:
+                path = package_simple_dir / p
+                paths_to_remove.append(path)
+                if has_metadata:
+                    paths_to_remove.append(path.with_name(path.name + ".metadata"))
             for p in paths_to_remove:
                 if p.exists():
                     p.unlink()
                     logger.info("Removed file %s", p)
-                mp = p.with_name(p.name + ".metadata")
-                if mp.exists():
-                    mp.unlink()
-                    logger.info("Removed metadata file %s", mp)
         remove_dir_with_files(package_simple_dir)
         metajson_path = self.jsonmeta_dir / package_name
         metajson_path.unlink(missing_ok=True)
@@ -1168,7 +1182,7 @@ class SyncPyPI(SyncBase):
         if self.sync_packages:
             # sync packages first, then sync index
             existing_hrefs = get_existing_hrefs(package_simple_path)
-            existing_hrefs = [] if existing_hrefs is None else existing_hrefs
+            existing_hrefs = {} if existing_hrefs is None else {p: m for p, m in existing_hrefs}
             release_files = PyPI.get_release_files_from_meta(meta)
             # remove packages that no longer exist remotely
             remote_hrefs = [PyPI.file_url_to_local_url(i["url"]) for i in release_files]
@@ -1179,8 +1193,9 @@ class SyncPyPI(SyncBase):
                 package_path = Path(normpath(package_simple_path / p))
                 package_path.unlink(missing_ok=True)
                 # Also remove associated metadata file
-                metadata_path = package_path.with_name(package_path.name + ".metadata")
-                metadata_path.unlink(missing_ok=True)
+                if existing_hrefs.get(href, False):
+                    metadata_path = package_path.with_name(package_path.name + ".metadata")
+                    metadata_path.unlink(missing_ok=True)
             for i in release_files:
                 url = i["url"]
                 dest = Path(
@@ -1306,9 +1321,6 @@ class SyncPlainHTTP(SyncBase):
         logger.info("updating %s", package_name)
         package_simple_path = self.simple_dir / package_name
         package_simple_path.mkdir(exist_ok=True)
-        if self.sync_packages:
-            hrefs = get_existing_hrefs(package_simple_path)
-            existing_hrefs = [] if hrefs is None else hrefs
         # Download JSON meta
         try:
             meta_original = self.get_package_metadata(package_name)
@@ -1325,6 +1337,8 @@ class SyncPlainHTTP(SyncBase):
         meta = file_inclusion_checker.get_filtered_meta(package_name, meta_original)
 
         if self.sync_packages:
+            hrefs = get_existing_hrefs(package_simple_path)
+            existing_hrefs = {} if hrefs is None else {p: m for p, m in hrefs}
             release_files = PyPI.get_release_files_from_meta(meta)
             remote_hrefs = [PyPI.file_url_to_local_url(i["url"]) for i in release_files]
             should_remove = list(set(existing_hrefs) - set(remote_hrefs))
@@ -1334,8 +1348,9 @@ class SyncPlainHTTP(SyncBase):
                 package_path = Path(normpath(package_simple_path / p))
                 package_path.unlink(missing_ok=True)
                 # Also remove associated metadata file
-                metadata_path = package_path.with_name(package_path.name + ".metadata")
-                metadata_path.unlink(missing_ok=True)
+                if existing_hrefs.get(href, False):
+                    metadata_path = package_path.with_name(package_path.name + ".metadata")
+                    metadata_path.unlink(missing_ok=True)
             package_simple_url = urljoin(self.upstream, f"simple/{package_name}/")
             for i in release_files:
                 href = PyPI.file_url_to_local_url(i["url"])
@@ -1791,7 +1806,7 @@ def verify(
             hrefs = get_existing_hrefs(sd)
             hrefs = [] if hrefs is None else hrefs
             nps = []
-            for href in hrefs:
+            for href, has_metadata in hrefs:
                 i = unquote(href)
                 # use normpath, which is much faster than pathlib resolve(), as it does not need to access fs
                 # we could make sure no symlinks could affect this here
@@ -1800,7 +1815,7 @@ def verify(
                 nps.append(np)
                 # also add metadata file to reference set if it exists
                 metadata_path = Path(np + ".metadata")
-                if metadata_path.exists():
+                if has_metadata:
                     metadata_np = str(metadata_path)
                     logger.debug("add to ref_set: %s", metadata_np)
                     nps.append(metadata_np)
