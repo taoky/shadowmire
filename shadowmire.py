@@ -2,7 +2,7 @@
 
 import sys
 from types import FrameType
-from typing import IO, Any, Callable, Generator, Literal, NoReturn, Optional
+from typing import IO, Any, Callable, Generator, Literal, NoReturn, Optional, overload
 import xmlrpc.client
 from dataclasses import dataclass
 import re
@@ -224,7 +224,12 @@ def fast_iterdir(
             yield item
 
 
-def get_package_urls_from_index_html(html_path: Path) -> list[tuple[str, bool]]:
+@overload
+def get_package_urls_from_index_html(html_path: Path, with_metadata: Literal[True]) -> list[tuple[str, bool]]: ...
+@overload
+def get_package_urls_from_index_html(html_path: Path, with_metadata: Literal[False] = False) -> list[str]: ...
+
+def get_package_urls_from_index_html(html_path: Path, with_metadata: bool = False):
     """
     Get all <a> href (fragments removed) from given simple/<package>/index.html contents
     """
@@ -258,7 +263,7 @@ def get_package_urls_from_index_html(html_path: Path) -> list[tuple[str, bool]]:
     for href, has_metadata in p.data:
         parsed_url = urlparse(href)
         clean_url = urlunparse(parsed_url._replace(fragment=""))
-        ret.append((clean_url, has_metadata))
+        ret.append((clean_url, has_metadata) if with_metadata else clean_url)
     return ret
 
 
@@ -303,7 +308,7 @@ def get_existing_hrefs(package_simple_path: Path) -> Optional[list[tuple[str, bo
         return get_package_urls_from_index_json(json_file)
     except FileNotFoundError:
         try:
-            return get_package_urls_from_index_html(html_file)
+            return get_package_urls_from_index_html(html_file, with_metadata=True)
         except FileNotFoundError:
             return None
 
