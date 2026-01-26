@@ -1034,13 +1034,21 @@ class SyncBase:
             f.write(str(index_serial))
         self.local_db.dump_json()
 
-    def skip_this_package(self, i: dict, dest: Path) -> bool:
+    def skip_this_package(self, i: dict, dest: Path, has_metadata: bool) -> bool:
         """
         A helper function for subclasses implementing do_update().
         As existence check is also done with stat(), this would not bring extra I/O overhead.
         Returns if skip this package or not.
         """
         try:
+            if has_metadata:
+                m_dest = dest.with_name(dest.name + ".metadata")
+                if not m_dest.exists():
+                    logger.warning(
+                        "metadata %s not exists locally, so the package would still be downloaded.",
+                        dest,
+                    )
+                    return False
             dest_size = dest.stat().st_size
             i_size = i.get("size", -1)
             if i_size == -1:
@@ -1180,8 +1188,9 @@ class SyncPyPI(SyncBase):
                         package_simple_path / self.pypi.file_url_to_local_path(i["url"])
                     )
                 )
+                has_metadata = core_metadata_map.get(i["filename"], False)
                 logger.info("downloading file %s -> %s", url, dest)
-                if self.skip_this_package(i, dest):
+                if self.skip_this_package(i, dest, has_metadata):
                     continue
 
                 dest.parent.mkdir(parents=True, exist_ok=True)
@@ -1191,7 +1200,7 @@ class SyncPyPI(SyncBase):
                     return None
 
                 # PEP 658: Download metadata file if available
-                if core_metadata_map.get(i["filename"], False):
+                if has_metadata:
                     m_url = url + ".metadata"
                     m_dest = dest.with_name(dest.name + ".metadata")
                     logger.info("downloading metadata %s -> %s", m_url, m_dest)
@@ -1334,7 +1343,8 @@ class SyncPlainHTTP(SyncBase):
                 url = urljoin(package_simple_url, href)
                 dest = Path(normpath(package_simple_path / path))
                 logger.info("downloading file %s -> %s", url, dest)
-                if self.skip_this_package(i, dest):
+                has_metadata = core_metadata_map.get(i["filename"], False)
+                if self.skip_this_package(i, dest, has_metadata):
                     continue
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 success, resp = download(self.session, url, dest)
@@ -1359,7 +1369,7 @@ class SyncPlainHTTP(SyncBase):
                         return None
 
                 # PEP 658: Download metadata file if available
-                if core_metadata_map.get(i["filename"], False):
+                if has_metadata:
                     # Try from upstream first, then fallback to PyPI if needed
                     m_url = url + ".metadata"
                     m_dest = dest.with_name(dest.name + ".metadata")
