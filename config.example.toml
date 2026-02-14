@@ -9,7 +9,8 @@ sync_packages = true
 exclude = [
     "^[a-z]"
 ]
-# When include has values, exclude is ignored
+# Include patterns have higher priority than exclude patterns.
+# Packages matching include patterns will be included even if they also match exclude patterns.
 # include = ["^requests$"]
 prerelease_exclude = [
     ".+"
