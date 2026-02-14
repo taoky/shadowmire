@@ -567,15 +567,16 @@ class PackageInclusionChecker:
         return bool(self.excludes or self.includes)
 
     def is_included(self, package_name: str) -> bool:
-        # If package matches include pattern, include it regardless of exclude patterns
+        if not self.has_rules():
+            return True
+
         if self.includes and match_patterns(package_name, self.includes):
             return True
-        
-            # Ignore excludes if includes are specified
+
         if self.excludes and match_patterns(package_name, self.excludes):
             return False
-        
-        return True # Default to include if no patterns matched
+
+        return not self.includes
 
 
 class FileInclusionChecker:
