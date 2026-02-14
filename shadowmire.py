@@ -91,6 +91,7 @@ class LocalVersionKV:
     """
 
     def __init__(self, dbpath: Path, jsonpath: Path) -> None:
+        dbpath.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(dbpath)
         self.jsonpath = jsonpath
         cur = self.conn.cursor()
