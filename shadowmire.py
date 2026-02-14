@@ -569,11 +569,14 @@ class PackageInclusionChecker:
     def is_included(self, package_name: str) -> bool:
         if not self.has_rules():
             return True
-        if self.includes:
-            # Ignore excludes if includes are specified
-            return match_patterns(package_name, self.includes)
-        else:
-            return not match_patterns(package_name, self.excludes)
+
+        if self.includes and match_patterns(package_name, self.includes):
+            return True
+
+        if self.excludes and match_patterns(package_name, self.excludes):
+            return False
+
+        return not self.includes
 
 
 class FileInclusionChecker:
