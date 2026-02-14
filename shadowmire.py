@@ -1584,6 +1584,7 @@ def cli(ctx: click.Context, repo: str) -> None:
 
     # Make sure basedir is absolute
     basedir = Path(repo).resolve()
+    basedir.mkdir(parents=True, exist_ok=True)
     local_db = LocalVersionKV(basedir / LOCAL_DB_NAME, basedir / LOCAL_JSON_NAME)
     ctx.obj["basedir"] = basedir
     ctx.obj["local_db"] = local_db
