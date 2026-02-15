@@ -225,9 +225,14 @@ def fast_iterdir(
 
 
 @overload
-def get_package_urls_from_index_html(html_path: Path, with_metadata: Literal[True]) -> list[tuple[str, bool]]: ...
+def get_package_urls_from_index_html(
+    html_path: Path, with_metadata: Literal[True]
+) -> list[tuple[str, bool]]: ...
 @overload
-def get_package_urls_from_index_html(html_path: Path, with_metadata: Literal[False] = False) -> list[str]: ...
+def get_package_urls_from_index_html(
+    html_path: Path, with_metadata: Literal[False] = False
+) -> list[str]: ...
+
 
 def get_package_urls_from_index_html(html_path: Path, with_metadata: bool = False):
     """
@@ -426,7 +431,9 @@ class PyPI:
 
     # Func modified from bandersnatch
     @classmethod
-    def generate_html_simple_page(cls, package_meta: dict, core_metadata_map: dict) -> str:
+    def generate_html_simple_page(
+        cls, package_meta: dict, core_metadata_map: dict
+    ) -> str:
         package_rawname = package_meta["info"]["name"]
         simple_page_content = (
             "<!DOCTYPE html>\n"
@@ -468,7 +475,9 @@ class PyPI:
                         f' data-core-metadata="{cls.digest_name}={html.escape(metadata[cls.digest_name])}"'
                     )
                 else:
-                    file_tags += ' data-dist-info-metadata="true" data-core-metadata="true"'
+                    file_tags += (
+                        ' data-dist-info-metadata="true" data-core-metadata="true"'
+                    )
 
             return file_tags
 
@@ -493,7 +502,9 @@ class PyPI:
 
     # Func modified from bandersnatch
     @classmethod
-    def generate_json_simple_page(cls, package_meta: dict, core_metadata_map: dict) -> str:
+    def generate_json_simple_page(
+        cls, package_meta: dict, core_metadata_map: dict
+    ) -> str:
         package_json: dict[str, Any] = {
             "files": [],
             "meta": {
@@ -513,7 +524,9 @@ class PyPI:
             package_json["files"].append(
                 {
                     "core-metadata": core_metadata_map.get(r["filename"], False),
-                    "data-dist-info-metadata": core_metadata_map.get(r["filename"], False),
+                    "data-dist-info-metadata": core_metadata_map.get(
+                        r["filename"], False
+                    ),
                     "filename": r["filename"],
                     "hashes": {
                         cls.digest_name: r["digests"][cls.digest_name],
@@ -996,7 +1009,9 @@ class SyncBase:
     ) -> Optional[int]:
         raise NotImplementedError
 
-    def write_meta_to_simple(self, package_simple_path: Path, meta: dict, core_metadata_map: dict) -> None:
+    def write_meta_to_simple(
+        self, package_simple_path: Path, meta: dict, core_metadata_map: dict
+    ) -> None:
         simple_html_contents = PyPI.generate_html_simple_page(meta, core_metadata_map)
         simple_json_contents = PyPI.generate_json_simple_page(meta, core_metadata_map)
         for html_filename in ("index.v1_html",):
@@ -1187,7 +1202,9 @@ class SyncPyPI(SyncBase):
         if self.sync_packages:
             # sync packages first, then sync index
             existing_hrefs = get_existing_hrefs(package_simple_path)
-            existing_hrefs = {} if existing_hrefs is None else {p: m for p, m in existing_hrefs}
+            existing_hrefs = (
+                {} if existing_hrefs is None else {p: m for p, m in existing_hrefs}
+            )
             release_files = PyPI.get_release_files_from_meta(meta)
             # remove packages that no longer exist remotely
             remote_hrefs = [PyPI.file_url_to_local_url(i["url"]) for i in release_files]
@@ -1199,7 +1216,9 @@ class SyncPyPI(SyncBase):
                 package_path.unlink(missing_ok=True)
                 # Also remove associated metadata file
                 if existing_hrefs.get(href, False):
-                    metadata_path = package_path.with_name(package_path.name + ".metadata")
+                    metadata_path = package_path.with_name(
+                        package_path.name + ".metadata"
+                    )
                     metadata_path.unlink(missing_ok=True)
             for i in release_files:
                 url = i["url"]
@@ -1224,11 +1243,11 @@ class SyncPyPI(SyncBase):
                     m_url = url + ".metadata"
                     m_dest = dest.with_name(dest.name + ".metadata")
                     logger.info("downloading metadata %s -> %s", m_url, m_dest)
-                    m_success, m_resp = download(
-                        self.session, m_url, m_dest
-                    )
+                    m_success, m_resp = download(self.session, m_url, m_dest)
                     if not m_success:
-                        logger.warning("ignoring %s metadata as it fails downloading", package_name)
+                        logger.warning(
+                            "ignoring %s metadata as it fails downloading", package_name
+                        )
 
         last_serial: int = meta["last_serial"]
 
@@ -1354,7 +1373,9 @@ class SyncPlainHTTP(SyncBase):
                 package_path.unlink(missing_ok=True)
                 # Also remove associated metadata file
                 if existing_hrefs.get(href, False):
-                    metadata_path = package_path.with_name(package_path.name + ".metadata")
+                    metadata_path = package_path.with_name(
+                        package_path.name + ".metadata"
+                    )
                     metadata_path.unlink(missing_ok=True)
             package_simple_url = urljoin(self.upstream, f"simple/{package_name}/")
             for i in release_files:
@@ -1412,7 +1433,8 @@ class SyncPlainHTTP(SyncBase):
                                 )
                         else:
                             logger.warning(
-                                "ignoring %s metadata as it fails downloading", package_name
+                                "ignoring %s metadata as it fails downloading",
+                                package_name,
                             )
 
         # OK, now it's safe to rename

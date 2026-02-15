@@ -56,8 +56,11 @@ def main(args):
                         if dep_name not in full_package_list:
                             input_queue.put(dep_name)
             except shadowmire.PackageNotFoundError:
-                print(f"Warning: Package {package_name} not found. Skipping.", file=sys.stderr)
-    
+                print(
+                    f"Warning: Package {package_name} not found. Skipping.",
+                    file=sys.stderr,
+                )
+
     with open(args.output_file, "w") as outfile:
         for pkg in sorted(full_package_list):
             outfile.write(f"{pkg}\n")

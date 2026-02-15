@@ -112,6 +112,7 @@ class TestOnlyIncludes:
         assert checker.is_included("requests") is False
         assert checker.is_included("pytest") is False
 
+
 # =============================================================================
 # Scenario 4: Only excludes exist (blacklist mode)
 # =============================================================================
@@ -129,7 +130,9 @@ class TestOnlyExcludes:
     def test_blacklist_mode(self):
         """Test blacklist mode: matched packages excluded, unmatched included."""
         # Exclude patterns: (r"django", r"flask", r"pytest")
-        checker = PackageInclusionChecker(include=(), exclude=(r"django", r"flask", r"pytest"))
+        checker = PackageInclusionChecker(
+            include=(), exclude=(r"django", r"flask", r"pytest")
+        )
 
         # Matched by blacklist - should be excluded
         assert checker.is_included("django") is False
@@ -140,6 +143,7 @@ class TestOnlyExcludes:
         assert checker.is_included("requests") is True
         assert checker.is_included("numpy") is True
         assert checker.is_included("pandas") is True
+
 
 # =============================================================================
 # Edge Cases
