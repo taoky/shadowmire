@@ -383,7 +383,7 @@ class PyPI:
         req = self.session.get(urljoin(self.host, f"pypi/{package_name}/json"))
         if req.status_code == 404:
             raise PackageNotFoundError
-        return req.json()  # type: ignore
+        return req.json()
 
     def get_package_simple(self, package_name: str) -> dict:
         # Based on PEP 691
@@ -398,7 +398,7 @@ class PyPI:
             raise PackageNotFoundError
         if req.status_code == 404:
             raise PackageNotFoundError
-        return req.json()  # type: ignore
+        return req.json()
 
     @staticmethod
     def get_release_files_from_meta(package_meta: dict) -> list[dict]:
@@ -572,7 +572,7 @@ class PackageInclusionChecker:
     A class for handling packages inclusion/exclusion based on regex patterns.
     """
 
-    def __init__(self, exclude: tuple[str], include: tuple[str]) -> None:
+    def __init__(self, exclude: tuple[str, ...], include: tuple[str, ...]) -> None:
         self.excludes = compile_regexes(exclude)
         self.includes = compile_regexes(include)
 
@@ -1332,7 +1332,7 @@ class SyncPlainHTTP(SyncBase):
             )
             if req.status_code == 404:
                 raise PackageNotFoundError
-            return req.json()  # type: ignore
+            return req.json()
         else:
             return self.pypi.get_package_simple(package_name)
 
@@ -1463,7 +1463,7 @@ def get_local_serial(package_meta_direntry: os.DirEntry[str]) -> Optional[int]:
         return None
     try:
         meta = json.loads(contents)
-        return meta["last_serial"]  # type: ignore
+        return meta["last_serial"]
     except Exception:
         logger.warning("cannot parse %s's JSON metadata", package_name, exc_info=True)
         return None
@@ -1612,7 +1612,7 @@ def cli(ctx: click.Context, repo: str) -> None:
     ctx.obj["local_db"] = local_db
 
 
-def compile_regexes(exclude: tuple[str]) -> list[re.Pattern[str]]:
+def compile_regexes(exclude: tuple[str, ...]) -> list[re.Pattern[str]]:
     return [re.compile(i) for i in exclude]
 
 
@@ -1794,7 +1794,7 @@ def verify(
         futures = {
             executor.submit(
                 packages_iterate, first_dir.name, idx % IOWORKERS
-            ): first_dir.name  # type: ignore
+            ): first_dir.name
             for idx, first_dir in enumerate(fast_iterdir((basedir / "packages"), "dir"))
         }
         try:
@@ -1852,8 +1852,7 @@ def verify(
         # MyPy does not enjoy same variable name with different types, even when --allow-redefinition
         # Ignore here to make mypy happy
         futures = {
-            executor.submit(iterate_simple, sname): sname
-            for sname in simple_dirs  # type: ignore
+            executor.submit(iterate_simple, sname): sname for sname in simple_dirs
         }
         try:
             for future in tqdm(

@@ -1,7 +1,7 @@
 -r requirements.txt
 -r requirements-genlist.txt
 black==24.4.2
-mypy==1.11.0
+ty~=0.0.17
 types-requests~=2.32.0
 types-tqdm~=4.66.0
 pytest~=9.0.0
