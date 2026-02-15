@@ -1849,8 +1849,6 @@ def verify(
                     nps.append(metadata_np)
             return nps
 
-        # MyPy does not enjoy same variable name with different types, even when --allow-redefinition
-        # Ignore here to make mypy happy
         futures = {
             executor.submit(iterate_simple, sname): sname for sname in simple_dirs
         }
