@@ -6,12 +6,19 @@ sync_packages = true
 # shadowmire_upstream = "http://example.com/pypi/web/"
 # use_pypi_index = true
 
+# Package selection rules:
+# 1. If a package matches any `include` pattern, it is included.
+# 2. Otherwise, if it matches any `exclude` pattern, it is excluded.
+# 3. Otherwise:
+#    - when both `include` and `exclude` are set, it is included
+#    - when only `include` is set, it is excluded (whitelist mode)
+#    - when only `exclude` is set, it is included (blacklist mode)
+#    - when both are empty, everything is included
 exclude = [
     "^[a-z]"
 ]
-# Include patterns have higher priority than exclude patterns.
-# Packages matching include patterns will be included even if they also match exclude patterns.
 # include = ["^requests$"]
+
 prerelease_exclude = [
     ".+"
 ]

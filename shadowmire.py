@@ -1473,7 +1473,7 @@ def sync_shared_args(func: Callable[..., Any]) -> Callable[..., Any]:
         click.option(
             "--include",
             multiple=True,
-            help="Only include these remote package names (regex patterns). If set, --exclude is ignored.",
+            help="Only include these remote package names (regex patterns). --include has higher priority than --exclude.",
         ),
         click.option(
             "--prerelease-exclude",
