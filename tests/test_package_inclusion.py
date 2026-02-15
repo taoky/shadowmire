@@ -9,11 +9,6 @@ Tests cover the following scenarios:
 """
 
 import pytest
-import sys
-from pathlib import Path
-
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from shadowmire import PackageInclusionChecker
 
@@ -177,7 +172,3 @@ class TestEdgeCases:
 
         assert checker.is_included("Flask") is True
         assert checker.is_included("flask") is False
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
