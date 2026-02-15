@@ -573,7 +573,7 @@ class PackageInclusionChecker:
         if self.excludes and match_patterns(package_name, self.excludes):
             return False
 
-        return not self.includes or self.excludes
+        return not self.includes or bool(self.excludes)
 
 
 class FileInclusionChecker:
