@@ -567,16 +567,13 @@ class PackageInclusionChecker:
         return bool(self.excludes or self.includes)
 
     def is_included(self, package_name: str) -> bool:
-        if not self.has_rules():
-            return True
-
         if self.includes and match_patterns(package_name, self.includes):
             return True
 
         if self.excludes and match_patterns(package_name, self.excludes):
             return False
 
-        return not self.includes
+        return not self.includes or bool(self.excludes)
 
 
 class FileInclusionChecker:
@@ -1476,7 +1473,7 @@ def sync_shared_args(func: Callable[..., Any]) -> Callable[..., Any]:
         click.option(
             "--include",
             multiple=True,
-            help="Only include these remote package names (regex patterns). If set, --exclude is ignored.",
+            help="Only include these remote package names (regex patterns). --include has higher priority than --exclude.",
         ),
         click.option(
             "--prerelease-exclude",
