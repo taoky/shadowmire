@@ -1151,7 +1151,9 @@ class SyncPyPI(SyncBase):
     ) -> Optional[int]:
         logger.info("updating %s", package_name)
         package_simple_path = self.simple_dir / package_name
-        package_simple_path.mkdir(exist_ok=True)
+        exists = package_simple_path.exists()
+        if not exists:
+            package_simple_path.mkdir(exist_ok=True)
         try:
             meta_original = self.get_package_metadata(package_name)
             logger.debug("%s meta: %s", package_name, meta_original)
@@ -1164,7 +1166,8 @@ class SyncPyPI(SyncBase):
             else:
                 recorded_serial = None
             if (
-                recorded_serial is not None
+                not exists  # When it exists locally, PyPI probably removes it and we need to do removal work.
+                and recorded_serial is not None
                 and self.last_serial is not None
                 and abs(recorded_serial - self.last_serial) < IGNORE_THRESHOLD
             ):
