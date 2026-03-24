@@ -1152,8 +1152,6 @@ class SyncPyPI(SyncBase):
         logger.info("updating %s", package_name)
         package_simple_path = self.simple_dir / package_name
         exists = package_simple_path.exists()
-        if not exists:
-            package_simple_path.mkdir(exist_ok=True)
         try:
             meta_original = self.get_package_metadata(package_name)
             logger.debug("%s meta: %s", package_name, meta_original)
@@ -1191,6 +1189,8 @@ class SyncPyPI(SyncBase):
                 return -1
             self.local_db.set(package_name, -1)
             return None
+        if not exists:
+            package_simple_path.mkdir(exist_ok=True)
 
         core_metadata_map = {}
         try:
