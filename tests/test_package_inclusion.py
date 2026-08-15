@@ -1,5 +1,5 @@
 """
-Unit tests for PackageInclusionChecker.is_included() method.
+Unit tests for PackageInclusionChecker.includes_metadata() method.
 
 Tests cover the following scenarios:
 1. Both includes and excludes are empty - all packages should be included
@@ -47,7 +47,7 @@ class TestBothEmpty:
     def test_empty_rules_all_included(self, package_name):
         """All packages should be included when no rules are specified."""
         checker = PackageInclusionChecker(exclude=(), include=())
-        assert checker.is_included(package_name) is True
+        assert checker.includes_metadata(package_name) is True
 
 
 # =============================================================================
@@ -72,17 +72,17 @@ class TestBothExist:
         )
 
         # Matches both include and exclude → included (include wins)
-        assert checker.is_included("flask") is True
-        assert checker.is_included("flask-restful") is True
+        assert checker.includes_metadata("flask") is True
+        assert checker.includes_metadata("flask-restful") is True
         # Matches exclude only → excluded
-        assert checker.is_included("django") is False
-        assert checker.is_included("django-rest-framework") is False
-        assert checker.is_included("pytest") is False
-        assert checker.is_included("pytest-cov") is False
+        assert checker.includes_metadata("django") is False
+        assert checker.includes_metadata("django-rest-framework") is False
+        assert checker.includes_metadata("pytest") is False
+        assert checker.includes_metadata("pytest-cov") is False
         # Matches neither → included (default)
-        assert checker.is_included("requests") is True
-        assert checker.is_included("numpy") is True
-        assert checker.is_included("pandas") is True
+        assert checker.includes_metadata("requests") is True
+        assert checker.includes_metadata("numpy") is True
+        assert checker.includes_metadata("pandas") is True
 
 
 # =============================================================================
@@ -104,12 +104,12 @@ class TestOnlyIncludes:
         checker = PackageInclusionChecker(include=(r"flask",), exclude=())
 
         # Matched by whitelist - should be included
-        assert checker.is_included("flask") is True
-        assert checker.is_included("flask-restful") is True
+        assert checker.includes_metadata("flask") is True
+        assert checker.includes_metadata("flask-restful") is True
         # Not matched by whitelist - should be excluded
-        assert checker.is_included("django") is False
-        assert checker.is_included("requests") is False
-        assert checker.is_included("pytest") is False
+        assert checker.includes_metadata("django") is False
+        assert checker.includes_metadata("requests") is False
+        assert checker.includes_metadata("pytest") is False
 
 
 # =============================================================================
@@ -134,14 +134,14 @@ class TestOnlyExcludes:
         )
 
         # Matched by blacklist - should be excluded
-        assert checker.is_included("django") is False
-        assert checker.is_included("flask") is False
-        assert checker.is_included("pytest") is False
-        assert checker.is_included("django-rest-framework") is False
+        assert checker.includes_metadata("django") is False
+        assert checker.includes_metadata("flask") is False
+        assert checker.includes_metadata("pytest") is False
+        assert checker.includes_metadata("django-rest-framework") is False
         # Not matched by blacklist - should be included
-        assert checker.is_included("requests") is True
-        assert checker.is_included("numpy") is True
-        assert checker.is_included("pandas") is True
+        assert checker.includes_metadata("requests") is True
+        assert checker.includes_metadata("numpy") is True
+        assert checker.includes_metadata("pandas") is True
 
 
 # =============================================================================
@@ -155,23 +155,23 @@ class TestEdgeCases:
     def test_empty_string_package_name(self):
         """Test with empty string as package name."""
         checker = PackageInclusionChecker(include=(r"flask",), exclude=())
-        assert checker.is_included("") is False
+        assert checker.includes_metadata("") is False
 
     def test_empty_string_no_rules(self):
         """Test empty string package name with no rules."""
         checker = PackageInclusionChecker(exclude=(), include=())
-        assert checker.is_included("") is True
+        assert checker.includes_metadata("") is True
 
     def test_anchored_pattern(self):
         """Test pattern with anchors (^ and $)."""
         checker = PackageInclusionChecker(include=(r"^flask$",), exclude=())
 
-        assert checker.is_included("flask") is True
-        assert checker.is_included("flask-restful") is False
+        assert checker.includes_metadata("flask") is True
+        assert checker.includes_metadata("flask-restful") is False
 
     def test_case_sensitivity(self):
         """Test that pattern matching is case-sensitive."""
         checker = PackageInclusionChecker(include=(r"Flask",), exclude=())
 
-        assert checker.is_included("Flask") is True
-        assert checker.is_included("flask") is False
+        assert checker.includes_metadata("Flask") is True
+        assert checker.includes_metadata("flask") is False

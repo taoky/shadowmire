@@ -18,6 +18,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from html.parser import HTMLParser
 from http.client import HTTPConnection
 from itertools import islice
@@ -547,9 +548,23 @@ class PyPI:
 ShadowmirePackageItem = tuple[str, int]
 
 
+class PackageFilterAction(StrEnum):
+    INCLUDE = "include"
+    METADATA_ONLY = "metadata-only"
+    EXCLUDE = "exclude"
+
+    @property
+    def includes_metadata(self) -> bool:
+        return self is not PackageFilterAction.EXCLUDE
+
+    @property
+    def includes_package_files(self) -> bool:
+        return self is PackageFilterAction.INCLUDE
+
+
 @dataclass(frozen=True)
 class PackageFilterRule:
-    action: Literal["include", "metadata-only", "exclude"]
+    action: PackageFilterAction
     pattern: re.Pattern[str]
 
 
@@ -590,11 +605,9 @@ class PackageFilterParamType(click.ParamType):
                 ctx,
             )
 
-        if not isinstance(action, str) or action not in (
-            "include",
-            "metadata-only",
-            "exclude",
-        ):
+        try:
+            filter_action = PackageFilterAction(action)
+        except (TypeError, ValueError):
             self.fail(
                 "action must be 'include', 'metadata-only', or 'exclude'", param, ctx
             )
@@ -606,7 +619,7 @@ class PackageFilterParamType(click.ParamType):
         except re.error as e:
             self.fail(f"invalid regular expression {pattern!r}: {e}", param, ctx)
 
-        return PackageFilterRule(action=action, pattern=compiled_pattern)
+        return PackageFilterRule(action=filter_action, pattern=compiled_pattern)
 
 
 PACKAGE_FILTER = PackageFilterParamType()
@@ -656,37 +669,31 @@ class PackageInclusionChecker:
     def has_rules(self) -> bool:
         return bool(self.excludes or self.includes or self.package_filters)
 
-    def has_ordered_rules(self) -> bool:
+    def filters_package_files(self) -> bool:
         return bool(self.package_filters)
 
-    def _get_ordered_action(
-        self, package_name: str
-    ) -> Literal["include", "metadata-only", "exclude"]:
-        for rule in self.package_filters:
-            if rule.pattern.search(package_name):
-                return rule.action
-        return "include"
+    def classify(self, package_name: str) -> PackageFilterAction:
+        if self.package_filters:
+            for rule in self.package_filters:
+                if rule.pattern.search(package_name):
+                    return rule.action
+            return PackageFilterAction.INCLUDE
 
-    def _is_legacy_included(self, package_name: str) -> bool:
         if self.includes and match_patterns(package_name, self.includes):
-            return True
+            return PackageFilterAction.INCLUDE
 
         if self.excludes and match_patterns(package_name, self.excludes):
-            return False
+            return PackageFilterAction.EXCLUDE
 
-        return not self.includes or bool(self.excludes)
+        if not self.includes or self.excludes:
+            return PackageFilterAction.INCLUDE
+        return PackageFilterAction.EXCLUDE
 
-    def is_included(
-        self,
-        package_name: str,
-        target: Literal["package", "metadata"] = "metadata",
-    ) -> bool:
-        if self.package_filters:
-            action = self._get_ordered_action(package_name)
-            if target == "metadata":
-                return action != "exclude"
-            return action == "include"
-        return self._is_legacy_included(package_name)
+    def includes_metadata(self, package_name: str) -> bool:
+        return self.classify(package_name).includes_metadata
+
+    def includes_package_files(self, package_name: str) -> bool:
+        return self.classify(package_name).includes_package_files
 
 
 class FileInclusionChecker:
@@ -819,44 +826,46 @@ class SyncBase:
             return remote
         res = {}
         for k, v in remote.items():
-            if package_inclusion_checker.is_included(k, "metadata"):
+            if package_inclusion_checker.includes_metadata(k):
                 res[k] = v
         return res
 
     def inspect_package_files(
-        self, package_name: str, package_included: bool
-    ) -> tuple[bool, bool]:
+        self, package_name: str, package_files_included: bool
+    ) -> Literal["remove", "update"] | None:
         """
-        Return (remove_existing_files, update_missing_files) for a package.
+        Return the package-file operation required for a package, if any.
         """
+        if package_files_included and not self.sync_packages:
+            return None
+
         package_simple_path = self.simple_dir / package_name
         hrefs = get_existing_hrefs(package_simple_path)
         if hrefs is None:
-            return False, package_included and self.sync_packages
+            return "update" if package_files_included else None
 
-        has_existing = False
-        has_missing = False
         for href, has_metadata in hrefs:
             relative_path = unquote(href)
             package_path = Path(normpath(package_simple_path / relative_path))
             metadata_path = package_path.with_name(package_path.name + ".metadata")
-            if package_path.exists() or (has_metadata and metadata_path.exists()):
-                has_existing = True
-            if not package_path.exists() or (
+            has_existing = package_path.exists() or (
+                has_metadata and metadata_path.exists()
+            )
+            has_missing = not package_path.exists() or (
                 has_metadata and not metadata_path.exists()
-            ):
-                has_missing = True
-
-        if package_included:
-            return False, self.sync_packages and has_missing
-        return has_existing, False
+            )
+            if package_files_included and has_missing:
+                return "update"
+            if not package_files_included and has_existing:
+                return "remove"
+        return None
 
     def determine_package_file_plan(
         self,
         package_names: set[str],
         package_inclusion_checker: PackageInclusionChecker,
     ) -> tuple[list[str], list[str]]:
-        if not package_inclusion_checker.has_ordered_rules():
+        if not package_inclusion_checker.filters_package_files():
             return [], []
 
         package_remove = []
@@ -869,18 +878,18 @@ class SyncBase:
                         executor.submit(
                             self.inspect_package_files,
                             package_name,
-                            package_inclusion_checker.is_included(
-                                package_name, "package"
+                            package_inclusion_checker.includes_package_files(
+                                package_name
                             ),
                         ): package_name
                         for package_name in batch
                     }
                     for future in as_completed(futures):
                         package_name = futures[future]
-                        remove_existing, update_missing = future.result()
-                        if remove_existing:
+                        action = future.result()
+                        if action == "remove":
                             package_remove.append(package_name)
-                        if update_missing:
+                        elif action == "update":
                             package_update.append(package_name)
                         pbar.update(1)
 
@@ -1039,8 +1048,8 @@ class SyncBase:
                     )
                     return False
 
-            package_files_included = package_inclusion_checker.is_included(
-                package_name, "package"
+            package_files_included = package_inclusion_checker.includes_package_files(
+                package_name
             )
             if not package_files_included:
                 self.remove_package_files_from_hrefs(
@@ -1123,7 +1132,7 @@ class SyncBase:
                     self.do_update,
                     package_name,
                     file_inclusion_checker,
-                    package_inclusion_checker.is_included(package_name, "package"),
+                    package_inclusion_checker.includes_package_files(package_name),
                     False,
                 ): (
                     idx,

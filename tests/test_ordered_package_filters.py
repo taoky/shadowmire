@@ -7,6 +7,7 @@ from click.testing import CliRunner
 
 from shadowmire import (
     PACKAGE_FILTER,
+    PackageFilterAction,
     PackageFilterRule,
     PackageInclusionChecker,
     SyncBase,
@@ -30,10 +31,10 @@ class TestOrderedPackageFilters:
             ),
         )
 
-        assert checker.is_included("django-ninja") is True
-        assert checker.is_included("django") is False
-        assert checker.is_included("django-rest-framework") is False
-        assert checker.is_included("flask") is True
+        assert checker.includes_metadata("django-ninja") is True
+        assert checker.includes_metadata("django") is False
+        assert checker.includes_metadata("django-rest-framework") is False
+        assert checker.includes_metadata("flask") is True
 
     def test_reversing_rules_changes_the_result(self):
         checker = PackageInclusionChecker(
@@ -45,7 +46,7 @@ class TestOrderedPackageFilters:
             ),
         )
 
-        assert checker.is_included("django-ninja") is False
+        assert checker.includes_metadata("django-ninja") is False
 
     def test_unmatched_packages_are_included(self):
         checker = PackageInclusionChecker(
@@ -54,8 +55,8 @@ class TestOrderedPackageFilters:
             package_filters=(parse_rule("include:^requests$"),),
         )
 
-        assert checker.is_included("requests") is True
-        assert checker.is_included("flask") is True
+        assert checker.includes_metadata("requests") is True
+        assert checker.includes_metadata("flask") is True
 
     def test_catch_all_exclude_creates_a_whitelist(self):
         checker = PackageInclusionChecker(
@@ -68,9 +69,9 @@ class TestOrderedPackageFilters:
             ),
         )
 
-        assert checker.is_included("requests") is True
-        assert checker.is_included("flask") is True
-        assert checker.is_included("django") is False
+        assert checker.includes_metadata("requests") is True
+        assert checker.includes_metadata("flask") is True
+        assert checker.includes_metadata("django") is False
 
     def test_new_and_legacy_rules_cannot_be_mixed(self):
         with pytest.raises(ValueError, match="cannot be used together"):
@@ -90,10 +91,10 @@ class TestOrderedPackageFilters:
             ),
         )
 
-        assert checker.is_included("large-package", "metadata") is True
-        assert checker.is_included("large-package", "package") is False
-        assert checker.is_included("broken-package", "metadata") is False
-        assert checker.is_included("broken-package", "package") is False
+        assert checker.includes_metadata("large-package") is True
+        assert checker.includes_package_files("large-package") is False
+        assert checker.includes_metadata("broken-package") is False
+        assert checker.includes_package_files("broken-package") is False
 
     def test_first_match_selects_one_state(self):
         checker = PackageInclusionChecker(
@@ -105,8 +106,9 @@ class TestOrderedPackageFilters:
             ),
         )
 
-        assert checker.is_included("demo", "metadata") is True
-        assert checker.is_included("demo", "package") is False
+        assert checker.classify("demo") is PackageFilterAction.METADATA_ONLY
+        assert checker.includes_metadata("demo") is True
+        assert checker.includes_package_files("demo") is False
 
 
 class TestPackageFilterParsing:
@@ -328,6 +330,20 @@ class TestPackageFilePlan:
         assert plan.update == []
         assert plan.package_remove == ["other"]
 
+    def test_no_sync_packages_does_not_inspect_included_files(
+        self, tmp_path, monkeypatch
+    ):
+        get_existing_hrefs = Mock(
+            side_effect=AssertionError("unexpected filesystem IO")
+        )
+        monkeypatch.setattr("shadowmire.get_existing_hrefs", get_existing_hrefs)
+        syncer = StubSync(tmp_path, {"popular": 1}, sync_packages=False)
+
+        action = syncer.inspect_package_files("popular", package_files_included=True)
+
+        assert action is None
+        get_existing_hrefs.assert_not_called()
+
     def test_removing_package_files_preserves_project_metadata(self, tmp_path):
         package_path = write_simple_project(tmp_path, "other", "other.whl")
         package_path.parent.mkdir(parents=True, exist_ok=True)
@@ -352,13 +368,9 @@ class TestPackageFilePlan:
         other_path = write_simple_project(tmp_path, "other", "other.whl")
         other_path.parent.mkdir(parents=True, exist_ok=True)
         other_path.write_bytes(b"package")
-        syncer = StubSync(
-            tmp_path, {"popular": 1, "other": 1}, sync_packages=True
-        )
+        syncer = StubSync(tmp_path, {"popular": 1, "other": 1}, sync_packages=True)
 
-        plan = syncer.determine_sync_plan(
-            {"popular": 1, "other": 1}, self.checker()
-        )
+        plan = syncer.determine_sync_plan({"popular": 1, "other": 1}, self.checker())
 
         assert plan.update == []
         assert plan.package_remove == []
