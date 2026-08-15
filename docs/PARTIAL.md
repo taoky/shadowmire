@@ -204,6 +204,48 @@ Do not mix generated ordered rules with the legacy `include` or `exclude`
 options. Always retain the final catch-all rule: unmatched ordered rules default
 to `include`.
 
+### Lock-file package lists
+
+For an air-gapped mirror, extract the package closure already recorded in a uv
+project lock file:
+
+```shell
+uv run --locked --no-dev --group utils python -m utils.extract_uv_lock_packages \
+    /path/to/uv.lock \
+    --output locked-projects.txt
+```
+
+PEP 751 `pylock.toml` and named `pylock.<name>.toml` files use a separate
+extractor:
+
+```shell
+uv run --locked --no-dev --group utils \
+    python -m utils.extract_pep751_lock_packages \
+    /path/to/pylock.toml \
+    --output locked-projects.txt
+```
+
+Both extractors validate and normalize names, sort and deduplicate the output,
+and read every package entry in the universal lock rather than resolving
+dependencies or evaluating markers for the current machine. Registry/index
+packages from every recorded index are included by name. Ensure the lock was
+generated against PyPI, or that the configured Shadowmire upstream contains
+packages which came from another recorded index.
+
+Sources which a Python package index mirror cannot reproduce are omitted:
+editable, virtual, local path/directory, VCS, and direct archive/URL packages.
+They are listed on stderr and must be transported separately. Use
+`--strict-non-index` to fail instead of producing a partial list. An empty index
+package list is also an error unless `--allow-empty` is explicitly supplied.
+
+Convert the extracted names to ordered filter entries in the same way as other
+generated lists:
+
+```shell
+uv run --locked --no-dev --group utils python -m utils.generate_package_filters \
+    locked-projects.txt package_filters.toml
+```
+
 ## Package-file state
 
 `local.value` is the project metadata serial. The nullable
