@@ -7,6 +7,8 @@ sync_packages = true
 # release/file filter change, or when local state needs repair. See
 # docs/PARTIAL.md for normal automatic reconciliation.
 # reconcile_package_files = true
+# Print the computed plan without applying it or finalizing the mirror.
+# dry_run = true
 # shadowmire_upstream = "http://example.com/pypi/web/"
 # use_pypi_index = true
 

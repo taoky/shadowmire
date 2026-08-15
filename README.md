@@ -53,6 +53,13 @@ If you need to download all packages, add `--sync-packages`.
 ./shadowmire.py sync --sync-packages
 ```
 
+Use `--dry-run` to print the computed plan as JSON without applying it or
+finalizing the mirror:
+
+```shell
+./shadowmire.py sync --sync-packages --dry-run
+```
+
 > [!IMPORTANT]
 > New partial-mirror state tracks whether package files lag behind metadata. For legacy rows created before that state existed, use `verify --sync-packages` or `sync --sync-packages --reconcile-package-files` once before relying on automatic package-file reconciliation. See [Partial mirrors](docs/PARTIAL.md).
 

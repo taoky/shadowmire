@@ -10,6 +10,7 @@ from shadowmire import (
     PackageFilterAction,
     PackageFilterRule,
     PackageInclusionChecker,
+    Plan,
     SyncBase,
     SyncPyPI,
     cli,
@@ -166,6 +167,35 @@ class TestPackageFilterCLI:
 
         assert result.exit_code == 0, result.output
         assert "--reconcile-package-files" in result.output
+
+    def test_sync_dry_run_only_prints_plan(self, tmp_path, monkeypatch):
+        syncer = Mock()
+        syncer.determine_sync_plan.return_value = Plan(
+            remove=["removed"],
+            update=["updated"],
+            package_remove=["metadata-only"],
+            package_state_update={"verified": 1},
+            remote_last_serial=42,
+        )
+        monkeypatch.setattr("shadowmire.get_syncer", Mock(return_value=syncer))
+        repo = tmp_path / "repo"
+
+        result = CliRunner().invoke(
+            cli,
+            ["--repo", str(repo), "sync", "--dry-run"],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output) == {
+            "remove": ["removed"],
+            "update": ["updated"],
+            "package_remove": ["metadata-only"],
+            "package_state_update": {"verified": 1},
+            "remote_last_serial": 42,
+        }
+        syncer.do_sync_plan.assert_not_called()
+        syncer.finalize.assert_not_called()
+        assert not (repo / "plan.json").exists()
 
     def test_structured_toml_rules_are_accepted(self, tmp_path):
         config = tmp_path / "config.toml"

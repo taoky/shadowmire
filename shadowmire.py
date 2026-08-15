@@ -2063,6 +2063,11 @@ def get_syncer(
     default=False,
     help="Scan existing projects to apply include/metadata-only filter changes to package files. Defaults to false.",
 )
+@click.option(
+    "--dry-run/--no-dry-run",
+    default=False,
+    help="Print the synchronization plan as JSON without applying it.",
+)
 def sync(
     ctx: click.Context,
     sync_packages: bool,
@@ -2071,6 +2076,7 @@ def sync(
     file_inclusion_checker: FileInclusionChecker,
     use_pypi_index: bool,
     reconcile_package_files: bool,
+    dry_run: bool,
 ) -> None:
     basedir: Path = ctx.obj["basedir"]
     local_db: LocalVersionKV = ctx.obj["local_db"]
@@ -2085,9 +2091,14 @@ def sync(
         reconcile_package_files=reconcile_package_files,
         local_file_serials=local_file_serials,
     )
+    plan_json = json.dumps(plan, default=vars, indent=2)
+    if dry_run:
+        click.echo(plan_json)
+        return
+
     # save plan for debugging
     with overwrite(basedir / "plan.json") as f:
-        json.dump(plan, f, default=vars, indent=2)
+        f.write(plan_json)
     success = syncer.do_sync_plan(
         plan, package_inclusion_checker, file_inclusion_checker
     )
