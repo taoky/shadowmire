@@ -116,6 +116,80 @@ is found, the command fails without writing `--output`; use `--allow-empty`
 only when an empty generated list is intentional. Run `--help` for the complete
 options.
 
+### PyPI BigQuery simple-index traffic
+
+`utils.analyze_bigquery` selects popular projects from PyPI's public
+`bigquery-public-data.pypi.simple_requests` table. It measures requests to the
+global PyPI service's `/simple/<project>/` pages, so its metric is analogous to
+the nginx analyzer's request metric. The public table does not contain client
+IP addresses, so the IPv4 `/24` and IPv6 `/48` vote deduplication cannot be
+applied to this source. The query counts all recorded simple-index requests,
+including automation; it does not filter by installer or CI metadata.
+
+Create or choose a Google Cloud project, enable the BigQuery API, and make
+Application Default Credentials available. For local development with the
+Google Cloud CLI:
+
+```shell
+gcloud auth application-default login
+```
+
+The authenticated identity needs permission to create BigQuery jobs in the
+billing project, normally through `bigquery.jobs.create`. In containers and
+other unattended environments, use the platform's Application Default
+Credentials mechanism, such as an attached service account or workload
+identity, rather than embedding credentials in the image.
+
+Estimate a seven-day query without incurring query-processing charges or
+writing an output file:
+
+```shell
+uv run --locked --no-dev --group utils python -m utils.analyze_bigquery \
+    --project my-billing-project \
+    --days 7 \
+    --coverage 0.99 \
+    --dry-run
+```
+
+Remove `--dry-run` and add `--output` to generate the project list:
+
+```shell
+uv run --locked --no-dev --group utils python -m utils.analyze_bigquery \
+    --project my-billing-project \
+    --days 7 \
+    --coverage 0.99 \
+    --output popular-projects.txt
+```
+
+By default, the date range is the latest complete UTC day ending at the current
+UTC date. Use `--days` to expand the window and `--end-date YYYY-MM-DD` to make
+the exclusive end date explicit.
+The SQL filters the partitioned `timestamp` column and reads only the timestamp
+and project-name fields.
+
+Every normal run first performs a free BigQuery dry run and reports the
+estimated logical bytes scanned, its percentage of the 1 TiB monthly free query
+allowance, and the cost at the US on-demand rate if no free allowance remains.
+It then executes only when that estimate is within
+`--maximum-bytes-billed`, which defaults to 1 TiB; the same limit is also sent
+with the actual query. This is a per-query limit, not an account budget: other
+queries can already have consumed some or all of the shared monthly allowance.
+At the current US rate of US$6.25/TiB, 100 GiB uses 9.77% of the allowance and
+would cost about US$0.61 after the allowance is exhausted. Query prices can
+change, so consult the current BigQuery pricing page before relying on the
+displayed rate.
+
+The exact cost is not fixed because each date partition changes with PyPI
+traffic. A failed dry run, an estimate over the configured limit, a query
+failure, or an empty result does not overwrite `--output`. Use `--allow-empty`
+only when an empty generated list is intentional.
+
+As a concrete reference, a dry run performed on 2026-08-16 for the seven-day
+range from 2026-08-08 through 2026-08-15 (exclusive) estimated 770.60 GiB. That
+was 75.25% of the 1 TiB monthly free query allowance, or about US$4.70 at
+US$6.25/TiB if no free allowance remained. A dry run itself does not incur
+query-processing charges or consume that allowance.
+
 The output contains entries for the inside of `package_filters`, not a complete
 configuration. The caller is responsible for assembling it, for example with
 concatenation or Jinja2. The generator:

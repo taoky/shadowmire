@@ -19,6 +19,7 @@ dependencies = [
 
 [dependency-groups]
 utils = [
+    "google-cloud-bigquery==3.42.2",
     "packaging==25.0",
 ]
 dev = [
