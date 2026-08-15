@@ -44,6 +44,16 @@ LOCAL_DB_NAME = "local.db"
 LOCAL_JSON_NAME = "local.json"
 LOCAL_DB_SERIAL_NAME = "local.db.serial"
 
+# Sentinel stored in LocalVersionKV.local.value when a project is present in the
+# upstream project list but its project metadata endpoint returns not found.
+PACKAGE_NOT_FOUND_SERIAL = -1
+
+# Values reserved for LocalVersionKV.local.file_serial. A NULL file_serial is
+# intentionally backwards compatible: it is interpreted as the row's metadata
+# serial (value), so merely upgrading an existing database does not schedule IO.
+PACKAGE_FILES_PENDING = -2
+PACKAGE_FILES_METADATA_ONLY = -1
+
 # Note that it's suggested to use only 3 workers for PyPI.
 WORKERS = int(os.environ.get("SHADOWMIRE_WORKERS", "3"))
 # Use threads to parallelize verification local IO
@@ -98,8 +108,12 @@ class LocalVersionKV:
         self.jsonpath = jsonpath
         cur = self.conn.cursor()
         cur.execute(
-            "CREATE TABLE IF NOT EXISTS local(key TEXT PRIMARY KEY, value INT NOT NULL)"
+            "CREATE TABLE IF NOT EXISTS local("
+            "key TEXT PRIMARY KEY, value INT NOT NULL, file_serial INT)"
         )
+        columns = {row[1] for row in cur.execute("PRAGMA table_info(local)")}
+        if "file_serial" not in columns:
+            cur.execute("ALTER TABLE local ADD COLUMN file_serial INT")
         self.conn.commit()
 
     def get(self, key: str) -> int | None:
@@ -115,6 +129,34 @@ class LocalVersionKV:
         cur.execute(self.INSERT_SQL, (key, value))
         self.conn.commit()
 
+    SET_WITH_FILE_SERIAL_SQL = (
+        "INSERT INTO local (key, value, file_serial) VALUES (?, ?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET "
+        "value=excluded.value, file_serial=excluded.file_serial"
+    )
+
+    def set_with_file_serial(
+        self, key: str, value: int, file_serial: int | None
+    ) -> None:
+        cur = self.conn.cursor()
+        cur.execute(self.SET_WITH_FILE_SERIAL_SQL, (key, value, file_serial))
+        self.conn.commit()
+
+    def set_file_serial(self, key: str, file_serial: int | None) -> None:
+        cur = self.conn.cursor()
+        cur.execute(
+            "UPDATE local SET file_serial = ? WHERE key = ?", (file_serial, key)
+        )
+        self.conn.commit()
+
+    def batch_set_file_serials(self, values: dict[str, int]) -> None:
+        cur = self.conn.cursor()
+        cur.executemany(
+            "UPDATE local SET file_serial = ? WHERE key = ?",
+            [(value, key) for key, value in values.items()],
+        )
+        self.conn.commit()
+
     def batch_set(self, d: dict[str, int]) -> None:
         cur = self.conn.cursor()
         kvs = list(d.items())
@@ -128,7 +170,7 @@ class LocalVersionKV:
 
     def remove_invalid(self) -> int:
         cur = self.conn.cursor()
-        cur.execute("DELETE FROM local WHERE value = -1")
+        cur.execute("DELETE FROM local WHERE value = ?", (PACKAGE_NOT_FOUND_SERIAL,))
         rowcnt = cur.rowcount
         self.conn.commit()
         return rowcnt
@@ -142,7 +184,10 @@ class LocalVersionKV:
     def keys(self, skip_invalid: bool = True) -> list[str]:
         cur = self.conn.cursor()
         if skip_invalid:
-            res = cur.execute("SELECT key FROM local WHERE value != -1")
+            res = cur.execute(
+                "SELECT key FROM local WHERE value != ?",
+                (PACKAGE_NOT_FOUND_SERIAL,),
+            )
         else:
             res = cur.execute("SELECT key FROM local")
         rows = res.fetchall()
@@ -151,9 +196,24 @@ class LocalVersionKV:
     def dump(self, skip_invalid: bool = True) -> dict[str, int]:
         cur = self.conn.cursor()
         if skip_invalid:
-            res = cur.execute("SELECT key, value FROM local WHERE value != -1")
+            res = cur.execute(
+                "SELECT key, value FROM local WHERE value != ?",
+                (PACKAGE_NOT_FOUND_SERIAL,),
+            )
         else:
             res = cur.execute("SELECT key, value FROM local")
+        rows = res.fetchall()
+        return {row[0]: row[1] for row in rows}
+
+    def dump_file_serials(self, skip_invalid: bool = True) -> dict[str, int | None]:
+        cur = self.conn.cursor()
+        if skip_invalid:
+            res = cur.execute(
+                "SELECT key, file_serial FROM local WHERE value != ?",
+                (PACKAGE_NOT_FOUND_SERIAL,),
+            )
+        else:
+            res = cur.execute("SELECT key, file_serial FROM local")
         rows = res.fetchall()
         return {row[0]: row[1] for row in rows}
 
@@ -627,9 +687,17 @@ PACKAGE_FILTER = PackageFilterParamType()
 
 @dataclass
 class Plan:
+    """Operations required to make the local mirror match the current policy."""
+
+    # Remove the entire project, including simple/JSON metadata and package files.
     remove: list[str]
+    # Refresh project metadata and, when enabled by policy, its package files.
     update: list[str]
+    # Remove only package files while retaining project metadata (metadata-only).
     package_remove: list[str]
+    # Persist already-verified file states without performing package IO.
+    package_state_update: dict[str, int]
+    # Upstream serial written to the root simple indexes after applying the plan.
     remote_last_serial: int
 
 
@@ -862,17 +930,20 @@ class SyncBase:
 
     def determine_package_file_plan(
         self,
-        package_names: set[str],
+        package_serials: dict[str, int],
         package_inclusion_checker: PackageInclusionChecker,
-    ) -> tuple[list[str], list[str]]:
+    ) -> tuple[list[str], list[str], dict[str, int]]:
         if not package_inclusion_checker.filters_package_files():
-            return [], []
+            return [], [], {}
 
         package_remove = []
         package_update = []
+        package_state_update = {}
         with ThreadPoolExecutor(max_workers=IOWORKERS) as executor:
-            package_iter = iter(package_names)
-            with tqdm(total=len(package_names), desc="Checking package filter") as pbar:
+            package_iter = iter(package_serials)
+            with tqdm(
+                total=len(package_serials), desc="Checking package filter"
+            ) as pbar:
                 while batch := list(islice(package_iter, IOWORKERS * 100)):
                     futures = {
                         executor.submit(
@@ -891,18 +962,31 @@ class SyncBase:
                             package_remove.append(package_name)
                         elif action == "update":
                             package_update.append(package_name)
+                        elif package_inclusion_checker.includes_package_files(
+                            package_name
+                        ):
+                            package_state_update[package_name] = (
+                                package_serials[package_name]
+                                if self.sync_packages
+                                else PACKAGE_FILES_PENDING
+                            )
+                        else:
+                            package_state_update[package_name] = (
+                                PACKAGE_FILES_METADATA_ONLY
+                            )
                         pbar.update(1)
 
-        return package_remove, package_update
+        return package_remove, package_update, package_state_update
 
     def determine_sync_plan(
         self,
         local: dict[str, int],
         package_inclusion_checker: PackageInclusionChecker,
         reconcile_package_files: bool = False,
+        local_file_serials: dict[str, int | None] | None = None,
     ) -> Plan:
         """
-        local should NOT skip invalid (-1) serials
+        local should NOT skip PACKAGE_NOT_FOUND_SERIAL entries
         """
         remote_sn, remote_pkgs = self.fetch_remote_versions()
         remote_pkgs = self.filter_remote(remote_pkgs, package_inclusion_checker)
@@ -935,22 +1019,56 @@ class SyncBase:
             local_serial = local[i]
             remote_serial = remote_pkgs[i]
             if local_serial != remote_serial:
-                if local_serial == -1:
+                if local_serial == PACKAGE_NOT_FOUND_SERIAL:
                     logger.info("skip %s, as it's marked as not exist at upstream", i)
                     to_remove.append(i)
                 else:
                     to_update.append(i)
         package_remove = []
+        package_state_update = {}
+        retained_packages = local_keys & remote_keys
+        retained_unchanged = retained_packages - set(to_update) - set(to_remove)
         if reconcile_package_files:
-            retained_packages = local_keys & remote_keys
-            package_remove, package_update = self.determine_package_file_plan(
-                retained_packages, package_inclusion_checker
+            package_serials = {
+                package_name: remote_pkgs[package_name]
+                for package_name in retained_unchanged
+            }
+            (
+                package_remove,
+                package_update,
+                package_state_update,
+            ) = self.determine_package_file_plan(
+                package_serials, package_inclusion_checker
             )
             to_update.extend(package_update)
+        elif local_file_serials is not None:
+            for package_name in retained_unchanged:
+                package_files_included = (
+                    package_inclusion_checker.includes_package_files(package_name)
+                )
+                file_serial = local_file_serials.get(package_name)
+                # NULL means the old Shadowmire behavior: package files are
+                # assumed to match the metadata serial. This avoids an IO spike
+                # solely because the schema gained a new nullable column.
+                effective_file_serial = (
+                    local[package_name] if file_serial is None else file_serial
+                )
+                if package_files_included:
+                    if (
+                        self.sync_packages
+                        and effective_file_serial != remote_pkgs[package_name]
+                    ):
+                        to_update.append(package_name)
+                elif (
+                    file_serial is not None
+                    and file_serial != PACKAGE_FILES_METADATA_ONLY
+                ):
+                    package_remove.append(package_name)
         output = Plan(
             remove=sorted(set(to_remove)),
             update=sorted(set(to_update)),
             package_remove=sorted(package_remove),
+            package_state_update=package_state_update,
             remote_last_serial=remote_sn,
         )
         return output
@@ -1090,6 +1208,8 @@ class SyncBase:
             return True
 
         to_update = []
+        package_state_update: dict[str, int] = {}
+        local_serials = self.local_db.dump()
         with ThreadPoolExecutor(max_workers=IOWORKERS) as executor:
             futures = {
                 executor.submit(is_consistent, package_name): package_name
@@ -1106,6 +1226,16 @@ class SyncBase:
                         consistent = future.result()
                         if not consistent:
                             to_update.append(package_name)
+                        elif not package_inclusion_checker.includes_package_files(
+                            package_name
+                        ):
+                            package_state_update[package_name] = (
+                                PACKAGE_FILES_METADATA_ONLY
+                            )
+                        elif self.sync_packages:
+                            package_state_update[package_name] = local_serials[
+                                package_name
+                            ]
                     except Exception:
                         logger.warning(
                             "%s generated an exception", package_name, exc_info=True
@@ -1115,6 +1245,8 @@ class SyncBase:
                 exit_with_futures(futures)
 
         logger.info("%s packages to update in check_and_update()", len(to_update))
+        if package_state_update:
+            self.local_db.batch_set_file_serials(package_state_update)
         return self.parallel_update(
             to_update, package_inclusion_checker, file_inclusion_checker
         )
@@ -1148,7 +1280,13 @@ class SyncBase:
                     try:
                         serial = future.result()
                         if serial:
-                            self.local_db.set(package_name, serial)
+                            self.record_local_update(
+                                package_name,
+                                serial,
+                                package_inclusion_checker.includes_package_files(
+                                    package_name
+                                ),
+                            )
                     except Exception as e:
                         if isinstance(e, (KeyboardInterrupt)):
                             raise
@@ -1162,6 +1300,15 @@ class SyncBase:
             except (ExitProgramException, KeyboardInterrupt):
                 exit_with_futures(futures)
         return success
+
+    def record_local_update(
+        self, package_name: str, serial: int, package_files_included: bool
+    ) -> None:
+        if package_files_included:
+            file_serial = serial if self.sync_packages else PACKAGE_FILES_PENDING
+        else:
+            file_serial = PACKAGE_FILES_METADATA_ONLY
+        self.local_db.set_with_file_serial(package_name, serial, file_serial)
 
     def do_sync_plan(
         self,
@@ -1181,6 +1328,10 @@ class SyncBase:
         )
         for package_name in plan.package_remove:
             self.remove_package_files(package_name)
+            self.local_db.set_file_serial(package_name, PACKAGE_FILES_METADATA_ONLY)
+
+        if plan.package_state_update:
+            self.local_db.batch_set_file_serials(plan.package_state_update)
 
         return self.parallel_update(
             to_update, package_inclusion_checker, file_inclusion_checker
@@ -1236,7 +1387,7 @@ class SyncBase:
         metajson_path.unlink(missing_ok=True)
         if use_db:
             old_serial = self.local_db.get(package_name)
-            if old_serial != -1:
+            if old_serial != PACKAGE_NOT_FOUND_SERIAL:
                 self.local_db.remove(package_name)
 
     def do_update(
@@ -1426,8 +1577,12 @@ class SyncPyPI(SyncBase):
             # try remove it locally, if it does not exist upstream
             self.do_remove(package_name, use_db=False)
             if not use_db:
-                return -1
-            self.local_db.set(package_name, -1)
+                return PACKAGE_NOT_FOUND_SERIAL
+            self.local_db.set_with_file_serial(
+                package_name,
+                PACKAGE_NOT_FOUND_SERIAL,
+                PACKAGE_FILES_METADATA_ONLY,
+            )
             return None
         if not exists:
             package_simple_path.mkdir(exist_ok=True)
@@ -1502,7 +1657,7 @@ class SyncPyPI(SyncBase):
             json.dump(meta_original, f)
 
         if use_db:
-            self.local_db.set(package_name, last_serial)
+            self.record_local_update(package_name, last_serial, package_files_included)
 
         return last_serial
 
@@ -1694,7 +1849,7 @@ class SyncPlainHTTP(SyncBase):
 
         last_serial: int = meta["last_serial"]
         if use_db:
-            self.local_db.set(package_name, last_serial)
+            self.record_local_update(package_name, last_serial, package_files_included)
 
         return last_serial
 
@@ -1923,10 +2078,12 @@ def sync(
         basedir, local_db, sync_packages, shadowmire_upstream, use_pypi_index
     )
     local = local_db.dump(skip_invalid=False)
+    local_file_serials = local_db.dump_file_serials(skip_invalid=False)
     plan = syncer.determine_sync_plan(
         local,
         package_inclusion_checker,
         reconcile_package_files=reconcile_package_files,
+        local_file_serials=local_file_serials,
     )
     # save plan for debugging
     with overwrite(basedir / "plan.json") as f:

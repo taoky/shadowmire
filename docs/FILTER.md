@@ -20,13 +20,14 @@ Normal sync is incremental and does not scan package files for projects whose up
 
 ### When reconciliation is required
 
-Shadowmire does not persist the previous package filter or scan every project during a normal sync. Therefore, use `--reconcile-package-files` on the first sync after a filter change if that change may switch any existing, metadata-visible project between `include` and `metadata-only`. Without reconciliation, affected projects are updated only when their upstream serial changes.
+Shadowmire records applied package-file state in `local.db`. Once a project has explicit state, normal sync applies `include`/`metadata-only` changes without scanning unrelated projects. See [Partial mirrors](PARTIAL.md) for the state model and generated-list workflows.
 
 | Change | Reconciliation required? | Reason |
 | --- | --- | --- |
-| `include` → `metadata-only` | Yes | The project remains in metadata, so an unchanged serial would not trigger removal of its existing files. |
-| `metadata-only` → `include` | Yes, with `--sync-packages` | The project remains in metadata, so an unchanged serial would not trigger downloading its missing files. |
-| Introducing or changing rules that may cause either transition | Yes | Shadowmire does not store the old rules and cannot identify the affected projects without scanning them. |
+| `include` → `metadata-only` with explicit state | No | The recorded state selects only the changed project for cleanup. |
+| `metadata-only` → `include` with explicit state | No, with `--sync-packages` | The recorded metadata-only state schedules that project for download. |
+| First application of package-file rules to an existing mirror | Yes | Legacy `NULL` state is trusted for upgrade compatibility; reconciliation establishes actual policy state. |
+| Changing release/file filters without an upstream serial change | Yes | Project-level state does not fingerprint release/file filter configuration. |
 | `include` or `metadata-only` → `exclude` | No | The project disappears from the filtered remote index, so normal sync removes the whole project even when its serial is unchanged. |
 | `exclude` → `include` or `metadata-only` | No | The project appears as new in the filtered remote index, so normal sync schedules a full project update. |
 | A fresh, empty mirror | No | Every selected project is already scheduled for its initial update. |

@@ -3,8 +3,9 @@
 
 # Note that by default sync_packages is false
 sync_packages = true
-# Enable after a filter change may switch existing projects between include and
-# metadata-only. See docs/FILTER.md for the exact cases and IO cost.
+# Enable when first applying package-file rules to an existing mirror, after a
+# release/file filter change, or when local state needs repair. See
+# docs/PARTIAL.md for normal automatic reconciliation.
 # reconcile_package_files = true
 # shadowmire_upstream = "http://example.com/pypi/web/"
 # use_pypi_index = true
