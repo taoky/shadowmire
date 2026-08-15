@@ -3,7 +3,7 @@ import sys
 from concurrent.futures import Future
 from typing import Any, NoReturn
 
-logger = logging.getLogger("shadowmire")
+logger = logging.getLogger(__name__)
 
 
 class PackageNotFoundError(Exception):

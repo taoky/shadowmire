@@ -35,7 +35,7 @@ from ..simple import (
     get_release_files,
 )
 
-logger = logging.getLogger("shadowmire")
+logger = logging.getLogger(__name__)
 
 
 @dataclass

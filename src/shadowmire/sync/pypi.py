@@ -23,7 +23,7 @@ from ..simple import (
 )
 from .base import SyncBase
 
-logger = logging.getLogger("shadowmire")
+logger = logging.getLogger(__name__)
 
 
 class SyncPyPI(SyncBase):

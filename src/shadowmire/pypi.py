@@ -9,7 +9,7 @@ from .errors import PackageNotFoundError
 from .filesystem import normalize
 from .http import create_requests_session
 
-logger = logging.getLogger("shadowmire")
+logger = logging.getLogger(__name__)
 
 
 class CustomXMLRPCTransport(xmlrpc.client.Transport):

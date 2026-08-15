@@ -32,7 +32,7 @@ from .sync.plain_http import SyncPlainHTTP
 from .sync.pypi import SyncPyPI
 
 LOG_FORMAT = "%(asctime)s %(levelname)s: %(message)s (%(filename)s:%(lineno)d)"
-logger = logging.getLogger("shadowmire")
+logger = logging.getLogger(__name__)
 
 
 def exit_handler(signum: int, frame: FrameType | None) -> None:

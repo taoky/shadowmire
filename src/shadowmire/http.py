@@ -8,7 +8,7 @@ from requests.adapters import HTTPAdapter, Retry
 from .constants import USER_AGENT
 from .filesystem import overwrite
 
-logger = logging.getLogger("shadowmire")
+logger = logging.getLogger(__name__)
 
 
 def create_requests_session() -> requests.Session:

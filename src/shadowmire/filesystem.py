@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import IO, Any, Literal
 
-logger = logging.getLogger("shadowmire")
+logger = logging.getLogger(__name__)
 
 
 @contextmanager
