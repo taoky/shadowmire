@@ -4,6 +4,12 @@ Shadowmire syncs PyPI (or plain HTTP(S) PyPI mirrors using Shadowmire) with a li
 
 Requires Python 3.11+.
 
+> [!NOTE]
+> Current version under development. Things might change!
+
+> [!NOTE]
+> For classic shadowmire version (without LLM commits), see [v1](https://github.com/taoky/shadowmire/tree/v1) branch.
+
 ## Installation
 
 ### Build with uv
@@ -81,12 +87,6 @@ docker run --rm \
     --volume "$PWD/config.toml:/config.toml:ro" \
     shadowmire --config /config.toml sync
 ```
-
-> [!NOTE]
-> Current version under development. Things might change!
-
-> [!NOTE]
-> For classic shadowmire version (without LLM commits), see [v1](https://github.com/taoky/shadowmire/tree/v1) branch.
 
 ## Breaking Changes
 
