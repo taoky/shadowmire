@@ -5,6 +5,9 @@ Shadowmire syncs PyPI (or plain HTTP(S) PyPI mirrors using Shadowmire) with a li
 Requires Python 3.11+.
 
 > [!NOTE]
+> Current version in under development. Things might change!
+
+> [!NOTE]
 > For classic shadowmire version (without LLM commits), see [v1](https://github.com/taoky/shadowmire/tree/v1) branch.
 
 ## Breaking Changes
