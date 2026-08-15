@@ -19,6 +19,7 @@ from os.path import (
 from contextlib import contextmanager
 import sqlite3
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from itertools import islice
 import signal
 import tomllib
 from copy import deepcopy
@@ -550,6 +551,7 @@ ShadowmirePackageItem = tuple[str, int]
 class PackageFilterRule:
     action: Literal["include", "exclude"]
     pattern: re.Pattern[str]
+    target: Literal["package", "metadata", "both"] = "both"
 
 
 class PackageFilterParamType(click.ParamType):
@@ -565,32 +567,43 @@ class PackageFilterParamType(click.ParamType):
             return value
 
         if isinstance(value, str):
-            action, separator, pattern = value.partition(":")
+            action_and_target, separator, pattern = value.partition(":")
             if not separator:
                 self.fail(
-                    "must use ACTION:PATTERN format (for example, exclude:^django)",
+                    "must use ACTION[@TARGET]:PATTERN format (for example, exclude@metadata:^django)",
                     param,
                     ctx,
                 )
+            action, target_separator, target = action_and_target.partition("@")
+            if not target_separator:
+                target = "both"
         elif isinstance(value, dict):
-            expected_keys = {"action", "pattern"}
-            if set(value) != expected_keys:
+            required_keys = {"action", "pattern"}
+            allowed_keys = required_keys | {"target"}
+            if not required_keys <= set(value) or not set(value) <= allowed_keys:
                 self.fail(
-                    "TOML rule must contain exactly 'action' and 'pattern'",
+                    "TOML rule must contain 'action' and 'pattern', with optional 'target'",
                     param,
                     ctx,
                 )
             action = value["action"]
             pattern = value["pattern"]
+            target = value.get("target", "both")
         else:
             self.fail(
-                "must be an ACTION:PATTERN string or a TOML inline table",
+                "must be an ACTION[@TARGET]:PATTERN string or a TOML inline table",
                 param,
                 ctx,
             )
 
         if not isinstance(action, str) or action not in ("include", "exclude"):
             self.fail("action must be 'include' or 'exclude'", param, ctx)
+        if not isinstance(target, str) or target not in (
+            "package",
+            "metadata",
+            "both",
+        ):
+            self.fail("target must be 'package', 'metadata', or 'both'", param, ctx)
         if not isinstance(pattern, str) or not pattern:
             self.fail("pattern must be a non-empty string", param, ctx)
 
@@ -599,7 +612,9 @@ class PackageFilterParamType(click.ParamType):
         except re.error as e:
             self.fail(f"invalid regular expression {pattern!r}: {e}", param, ctx)
 
-        return PackageFilterRule(action=action, pattern=compiled_pattern)
+        return PackageFilterRule(
+            action=action, pattern=compiled_pattern, target=target
+        )
 
 
 PACKAGE_FILTER = PackageFilterParamType()
@@ -609,6 +624,7 @@ PACKAGE_FILTER = PackageFilterParamType()
 class Plan:
     remove: list[str]
     update: list[str]
+    package_remove: list[str]
     remote_last_serial: int
 
 
@@ -648,9 +664,16 @@ class PackageInclusionChecker:
     def has_rules(self) -> bool:
         return bool(self.excludes or self.includes or self.package_filters)
 
-    def is_included(self, package_name: str) -> bool:
+    def has_scoped_rules(self) -> bool:
+        return any(rule.target != "both" for rule in self.package_filters)
+
+    def _is_included_for_target(
+        self, package_name: str, target: Literal["package", "metadata"]
+    ) -> bool:
         if self.package_filters:
             for rule in self.package_filters:
+                if rule.target not in (target, "both"):
+                    continue
                 if rule.pattern.search(package_name):
                     return rule.action == "include"
             return True
@@ -662,6 +685,16 @@ class PackageInclusionChecker:
             return False
 
         return not self.includes or bool(self.excludes)
+
+    def is_included(
+        self,
+        package_name: str,
+        target: Literal["package", "metadata"] = "metadata",
+    ) -> bool:
+        metadata_included = self._is_included_for_target(package_name, "metadata")
+        if target == "metadata" or not metadata_included:
+            return metadata_included
+        return self._is_included_for_target(package_name, "package")
 
 
 class FileInclusionChecker:
@@ -794,9 +827,72 @@ class SyncBase:
             return remote
         res = {}
         for k, v in remote.items():
-            if package_inclusion_checker.is_included(k):
+            if package_inclusion_checker.is_included(k, "metadata"):
                 res[k] = v
         return res
+
+    def inspect_package_files(
+        self, package_name: str, package_included: bool
+    ) -> tuple[bool, bool]:
+        """
+        Return (remove_existing_files, update_missing_files) for a package.
+        """
+        package_simple_path = self.simple_dir / package_name
+        hrefs = get_existing_hrefs(package_simple_path)
+        if hrefs is None:
+            return False, package_included and self.sync_packages
+
+        has_existing = False
+        has_missing = False
+        for href, has_metadata in hrefs:
+            relative_path = unquote(href)
+            package_path = Path(normpath(package_simple_path / relative_path))
+            metadata_path = package_path.with_name(package_path.name + ".metadata")
+            if package_path.exists() or (has_metadata and metadata_path.exists()):
+                has_existing = True
+            if not package_path.exists() or (
+                has_metadata and not metadata_path.exists()
+            ):
+                has_missing = True
+
+        if package_included:
+            return False, self.sync_packages and has_missing
+        return has_existing, False
+
+    def determine_package_file_plan(
+        self,
+        package_names: set[str],
+        package_inclusion_checker: PackageInclusionChecker,
+    ) -> tuple[list[str], list[str]]:
+        if not package_inclusion_checker.has_scoped_rules():
+            return [], []
+
+        package_remove = []
+        package_update = []
+        with ThreadPoolExecutor(max_workers=IOWORKERS) as executor:
+            package_iter = iter(package_names)
+            with tqdm(total=len(package_names), desc="Checking package filter") as pbar:
+                while batch := list(islice(package_iter, IOWORKERS * 100)):
+                    futures = {
+                        executor.submit(
+                            self.inspect_package_files,
+                            package_name,
+                            package_inclusion_checker.is_included(
+                                package_name, "package"
+                            ),
+                        ): package_name
+                        for package_name in batch
+                    }
+                    for future in as_completed(futures):
+                        package_name = futures[future]
+                        remove_existing, update_missing = future.result()
+                        if remove_existing:
+                            package_remove.append(package_name)
+                        if update_missing:
+                            package_update.append(package_name)
+                        pbar.update(1)
+
+        return package_remove, package_update
 
     def determine_sync_plan(
         self, local: dict[str, int], package_inclusion_checker: PackageInclusionChecker
@@ -842,7 +938,17 @@ class SyncBase:
                     to_remove.append(i)
                 else:
                     to_update.append(i)
-        output = Plan(remove=to_remove, update=to_update, remote_last_serial=remote_sn)
+        retained_packages = local_keys & remote_keys
+        package_remove, package_update = self.determine_package_file_plan(
+            retained_packages, package_inclusion_checker
+        )
+        to_update.extend(package_update)
+        output = Plan(
+            remove=sorted(set(to_remove)),
+            update=sorted(set(to_update)),
+            package_remove=sorted(package_remove),
+            remote_last_serial=remote_sn,
+        )
         return output
 
     def fetch_remote_versions(self) -> tuple[int, dict[str, int]]:
@@ -876,6 +982,7 @@ class SyncBase:
     def check_and_update(
         self,
         package_names: list[str],
+        package_inclusion_checker: PackageInclusionChecker,
         file_inclusion_checker: FileInclusionChecker,
         json_files: set[str],
         packages_pathcache: set[str],
@@ -897,6 +1004,7 @@ class SyncBase:
                     html_simple.symlink_to("index.v1_html")
                 hrefs_html = get_package_urls_from_index_html(htmlv1_simple)
                 hrefsize_json = get_package_urls_size_from_index_json(json_simple)
+                href_metadata_json = dict(get_package_urls_from_index_json(json_simple))
             except FileNotFoundError:
                 logger.info(
                     "add %s as it does not have index.v1_html or index.v1_json",
@@ -937,7 +1045,9 @@ class SyncBase:
                     return False
 
             # OK, check if all hrefs have corresponding files
-            if self.sync_packages:
+            if self.sync_packages and package_inclusion_checker.is_included(
+                package_name, "package"
+            ):
                 for href, size in hrefsize_json:
                     relative_path = unquote(href)
                     dest_pathstr = normpath(package_simple_path / relative_path)
@@ -945,6 +1055,10 @@ class SyncBase:
                         # Fast shortcut to avoid stat() it
                         if dest_pathstr not in packages_pathcache:
                             raise FileNotFoundError
+                        if href_metadata_json.get(href, False):
+                            metadata_pathstr = dest_pathstr + ".metadata"
+                            if metadata_pathstr not in packages_pathcache:
+                                raise FileNotFoundError
                         if compare_size and size != -1:
                             dest = Path(dest_pathstr)
                             # So, do stat() for real only when we need to do so,
@@ -991,11 +1105,14 @@ class SyncBase:
                 exit_with_futures(futures)
 
         logger.info("%s packages to update in check_and_update()", len(to_update))
-        return self.parallel_update(to_update, file_inclusion_checker)
+        return self.parallel_update(
+            to_update, package_inclusion_checker, file_inclusion_checker
+        )
 
     def parallel_update(
         self,
         package_names: list[str],
+        package_inclusion_checker: PackageInclusionChecker,
         file_inclusion_checker: FileInclusionChecker,
     ) -> bool:
         success = True
@@ -1005,6 +1122,7 @@ class SyncBase:
                     self.do_update,
                     package_name,
                     file_inclusion_checker,
+                    package_inclusion_checker.is_included(package_name, "package"),
                     False,
                 ): (
                     idx,
@@ -1038,6 +1156,7 @@ class SyncBase:
     def do_sync_plan(
         self,
         plan: Plan,
+        package_inclusion_checker: PackageInclusionChecker,
         file_inclusion_checker: FileInclusionChecker,
     ) -> bool:
         to_remove = plan.remove
@@ -1046,7 +1165,36 @@ class SyncBase:
         for package_name in to_remove:
             self.do_remove(package_name)
 
-        return self.parallel_update(to_update, file_inclusion_checker)
+        logger.info(
+            "%s packages have files excluded by package filters",
+            len(plan.package_remove),
+        )
+        for package_name in plan.package_remove:
+            self.remove_package_files(package_name)
+
+        return self.parallel_update(
+            to_update, package_inclusion_checker, file_inclusion_checker
+        )
+
+    def remove_package_files(self, package_name: str) -> None:
+        package_simple_dir = self.simple_dir / package_name
+        package_files = get_existing_hrefs(package_simple_dir)
+        if not package_files:
+            return
+
+        for href, has_metadata in package_files:
+            relative_path = unquote(href)
+            package_path = Path(normpath(package_simple_dir / relative_path))
+            if package_path.exists():
+                package_path.unlink()
+                logger.info("Removed package file %s", package_path)
+            if has_metadata:
+                metadata_path = package_path.with_name(
+                    package_path.name + ".metadata"
+                )
+                if metadata_path.exists():
+                    metadata_path.unlink()
+                    logger.info("Removed package metadata file %s", metadata_path)
 
     def do_remove(
         self, package_name: str, use_db: bool = True, remove_packages: bool = True
@@ -1080,6 +1228,7 @@ class SyncBase:
         self,
         package_name: str,
         file_inclusion_checker: FileInclusionChecker,
+        package_files_included: bool,
         use_db: bool = True,
     ) -> Optional[int]:
         raise NotImplementedError
@@ -1222,6 +1371,7 @@ class SyncPyPI(SyncBase):
         self,
         package_name: str,
         file_inclusion_checker: FileInclusionChecker,
+        package_files_included: bool,
         use_db: bool = True,
     ) -> Optional[int]:
         logger.info("updating %s", package_name)
@@ -1277,7 +1427,7 @@ class SyncPyPI(SyncBase):
         # filter prerelease and wheel files, if necessary
         meta = file_inclusion_checker.get_filtered_meta(package_name, meta_original)
 
-        if self.sync_packages:
+        if self.sync_packages and package_files_included:
             # sync packages first, then sync index
             existing_hrefs = get_existing_hrefs(package_simple_path)
             existing_hrefs = (
@@ -1418,6 +1568,7 @@ class SyncPlainHTTP(SyncBase):
         self,
         package_name: str,
         file_inclusion_checker: FileInclusionChecker,
+        package_files_included: bool,
         use_db: bool = True,
     ) -> Optional[int]:
         logger.info("updating %s", package_name)
@@ -1438,7 +1589,7 @@ class SyncPlainHTTP(SyncBase):
         # filter prerelease and wheel files, if necessary
         meta = file_inclusion_checker.get_filtered_meta(package_name, meta_original)
 
-        if self.sync_packages:
+        if self.sync_packages and package_files_included:
             hrefs = get_existing_hrefs(package_simple_path)
             existing_hrefs = {} if hrefs is None else {p: m for p, m in hrefs}
             release_files = PyPI.get_release_files_from_meta(meta)
@@ -1580,7 +1731,7 @@ def sync_shared_args(func: Callable[..., Any]) -> Callable[..., Any]:
             "package_filters",
             multiple=True,
             type=PACKAGE_FILTER,
-            help="Apply an ordered package filter in ACTION:PATTERN format. The first match wins; unmatched packages are included.",
+            help="Apply an ordered package filter in ACTION[@TARGET]:PATTERN format. TARGET is package, metadata, or both (default). The first match wins; unmatched packages are included.",
         ),
         click.option(
             "--prerelease-exclude",
@@ -1753,7 +1904,9 @@ def sync(
     # save plan for debugging
     with overwrite(basedir / "plan.json") as f:
         json.dump(plan, f, default=vars, indent=2)
-    success = syncer.do_sync_plan(plan, file_inclusion_checker)
+    success = syncer.do_sync_plan(
+        plan, package_inclusion_checker, file_inclusion_checker
+    )
     syncer.finalize(plan.remote_last_serial)
 
     logger.info("Synchronization finished. Success: %s", success)
@@ -1865,6 +2018,13 @@ def verify(
         logger.info("package %s not in remote index", package_name)
         syncer.do_remove(package_name, remove_packages=False)
 
+    logger.info(
+        "%s packages have files excluded by package filters",
+        len(plan.package_remove),
+    )
+    for package_name in plan.package_remove:
+        syncer.remove_package_files(package_name)
+
     # After some removal, local_names is changed.
     local_names = set(local_db.keys())
 
@@ -1909,6 +2069,7 @@ def verify(
     )
     success = syncer.check_and_update(
         list(local_names),
+        package_inclusion_checker,
         file_inclusion_checker,
         json_files,
         packages_pathcache,
@@ -1996,7 +2157,7 @@ def do_update(
     syncer = get_syncer(
         basedir, local_db, sync_packages, shadowmire_upstream, use_pypi_index
     )
-    syncer.do_update(package_name, file_inclusion_checker)
+    syncer.do_update(package_name, file_inclusion_checker, package_files_included=True)
 
 
 @cli.command(help="Manual remove given package for debugging purpose")
