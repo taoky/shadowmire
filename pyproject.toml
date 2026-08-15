@@ -17,6 +17,19 @@ dependencies = [
     "tqdm==4.66.4",
 ]
 
+[dependency-groups]
+utils = [
+    "packaging==25.0",
+]
+dev = [
+    { include-group = "utils" },
+    "pytest~=9.0.0",
+    "ruff~=0.16.3",
+    "ty~=0.0.72",
+    "types-requests~=2.32.0",
+    "types-tqdm~=4.66.0",
+]
+
 [project.urls]
 Homepage = "https://github.com/taoky/shadowmire"
 Repository = "https://github.com/taoky/shadowmire"
@@ -26,6 +39,12 @@ shadowmire = "shadowmire.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/shadowmire"]
+
+# Keep uv.lock independent of developer-specific user configuration. Command-line
+# index options can still override this when intentionally using another index.
+[[tool.uv.index]]
+url = "https://pypi.org/simple"
+default = true
 
 [tool.pytest]
 testpaths = ["tests"]

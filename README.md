@@ -6,43 +6,48 @@ Requires Python 3.11+.
 
 ## Installation
 
-Create a virtual environment and install Shadowmire from a source checkout:
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then create the project environment from the committed lock file:
 
 ```shell
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install .
+uv sync --locked --no-dev
 ```
 
-The project metadata installs the runtime dependencies (`click`, `requests`,
-and `tqdm`) automatically. This also installs the `shadowmire` command; the
-equivalent module entry point is `python -m shadowmire`.
-
-Scripts under `utils/` have one additional dependency set. Install it when
-using those source-checkout tools:
+This creates `.venv`, installs the locked runtime dependencies and installs Shadowmire in editable mode. Run it with either entry point:
 
 ```shell
-python -m pip install -r requirements-utils.txt
+uv run --locked --no-dev shadowmire --help
+uv run --locked --no-dev python -m shadowmire --help
+```
+
+Scripts under `utils/` have an additional dependency group. Include it when using those source-checkout tools:
+
+```shell
+uv sync --locked --no-dev --group utils
 ```
 
 ## Development
 
-Install the project in editable mode together with the utility, test, lint,
-format, and type-checking dependencies:
+The default `dev` group includes the utility, test, lint, format, and type-checking dependencies:
 
 ```shell
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements-dev.txt
+uv sync --locked
 ```
 
 Run the local checks with:
 
 ```shell
-pytest
-ruff format --check src utils tests
-ruff check src utils tests
-ty check
+uv run --locked pytest
+uv run --locked ruff format --check src utils tests
+uv run --locked ruff check src utils tests
+uv run --locked ty check
+```
+
+After changing dependencies with `uv add`, `uv remove`, or by editing `pyproject.toml`, run `uv lock` and commit both files.
+
+If a mirror was written into the lock file, regenerate it explicitly against PyPI:
+
+```shell
+uv lock --refresh --default-index https://pypi.org/simple
 ```
 
 > [!NOTE]
