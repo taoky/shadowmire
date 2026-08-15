@@ -546,6 +546,65 @@ class PyPI:
 ShadowmirePackageItem = tuple[str, int]
 
 
+@dataclass(frozen=True)
+class PackageFilterRule:
+    action: Literal["include", "exclude"]
+    pattern: re.Pattern[str]
+
+
+class PackageFilterParamType(click.ParamType):
+    name = "package-filter"
+
+    def convert(
+        self,
+        value: Any,
+        param: Optional[click.Parameter],
+        ctx: Optional[click.Context],
+    ) -> PackageFilterRule:
+        if isinstance(value, PackageFilterRule):
+            return value
+
+        if isinstance(value, str):
+            action, separator, pattern = value.partition(":")
+            if not separator:
+                self.fail(
+                    "must use ACTION:PATTERN format (for example, exclude:^django)",
+                    param,
+                    ctx,
+                )
+        elif isinstance(value, dict):
+            expected_keys = {"action", "pattern"}
+            if set(value) != expected_keys:
+                self.fail(
+                    "TOML rule must contain exactly 'action' and 'pattern'",
+                    param,
+                    ctx,
+                )
+            action = value["action"]
+            pattern = value["pattern"]
+        else:
+            self.fail(
+                "must be an ACTION:PATTERN string or a TOML inline table",
+                param,
+                ctx,
+            )
+
+        if not isinstance(action, str) or action not in ("include", "exclude"):
+            self.fail("action must be 'include' or 'exclude'", param, ctx)
+        if not isinstance(pattern, str) or not pattern:
+            self.fail("pattern must be a non-empty string", param, ctx)
+
+        try:
+            compiled_pattern = re.compile(pattern)
+        except re.error as e:
+            self.fail(f"invalid regular expression {pattern!r}: {e}", param, ctx)
+
+        return PackageFilterRule(action=action, pattern=compiled_pattern)
+
+
+PACKAGE_FILTER = PackageFilterParamType()
+
+
 @dataclass
 class Plan:
     remove: list[str]
@@ -572,14 +631,30 @@ class PackageInclusionChecker:
     A class for handling packages inclusion/exclusion based on regex patterns.
     """
 
-    def __init__(self, exclude: tuple[str, ...], include: tuple[str, ...]) -> None:
+    def __init__(
+        self,
+        exclude: tuple[str, ...],
+        include: tuple[str, ...],
+        package_filters: tuple[PackageFilterRule, ...] = (),
+    ) -> None:
+        if package_filters and (exclude or include):
+            raise ValueError(
+                "package_filters cannot be used together with include or exclude"
+            )
         self.excludes = compile_regexes(exclude)
         self.includes = compile_regexes(include)
+        self.package_filters = package_filters
 
     def has_rules(self) -> bool:
-        return bool(self.excludes or self.includes)
+        return bool(self.excludes or self.includes or self.package_filters)
 
     def is_included(self, package_name: str) -> bool:
+        if self.package_filters:
+            for rule in self.package_filters:
+                if rule.pattern.search(package_name):
+                    return rule.action == "include"
+            return True
+
         if self.includes and match_patterns(package_name, self.includes):
             return True
 
@@ -1501,6 +1576,13 @@ def sync_shared_args(func: Callable[..., Any]) -> Callable[..., Any]:
             help="Only include these remote package names (regex patterns). --include has higher priority than --exclude.",
         ),
         click.option(
+            "--package-filter",
+            "package_filters",
+            multiple=True,
+            type=PACKAGE_FILTER,
+            help="Apply an ordered package filter in ACTION:PATTERN format. The first match wins; unmatched packages are included.",
+        ),
+        click.option(
             "--prerelease-exclude",
             multiple=True,
             help="Package names of which prereleases will be excluded (regex patterns).",
@@ -1537,9 +1619,17 @@ def sync_shared_args(func: Callable[..., Any]) -> Callable[..., Any]:
     @functools.wraps(func)
     @click.pass_context
     def wrapper(ctx: click.Context, *args, **kwargs):
+        package_filters = kwargs.pop("package_filters")
+        exclude = kwargs.pop("exclude")
+        include = kwargs.pop("include")
+        if package_filters and (exclude or include):
+            raise click.UsageError(
+                "--package-filter/package_filters cannot be used together with --include/include or --exclude/exclude"
+            )
         package_inclusion_checker = PackageInclusionChecker(
-            exclude=kwargs.pop("exclude"),
-            include=kwargs.pop("include"),
+            exclude=exclude,
+            include=include,
+            package_filters=package_filters,
         )
         file_inclusion_checker = FileInclusionChecker(
             prerelease_exclude=kwargs.pop("prerelease_exclude"),

@@ -56,11 +56,18 @@ If you need to download all packages, add `--sync-packages`.
 > [!IMPORTANT]
 > If you sync with indexes only first, `--sync-packages` would NOT update packages which have been the latest versions. Use `verify` command for this.
 
-Sync command also supports `--exclude` -- you could give multiple regexes like this:
+Sync supports both ordered package filters and the legacy `--include`/`--exclude`
+filters. For example, this keeps `django-ninja` while excluding other package
+names beginning with `django`:
 
 ```shell
-./shadowmire.py sync --exclude package1 --exclude ^0
+./shadowmire.py sync \
+    --package-filter 'include:^django-ninja$' \
+    --package-filter 'exclude:^django'
 ```
+
+See [Package Filtering](docs/FILTER.md) for the complete new and legacy filter
+semantics and TOML configuration.
 
 Also it supports prerelease filtering like [this](https://bandersnatch.readthedocs.io/en/latest/filtering_configuration.html#prerelease-filtering):
 
