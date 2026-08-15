@@ -65,6 +65,9 @@ a TOML fragment with:
 python -m utils.generate_package_filters packages.txt package_filters.toml
 ```
 
+The `utils` modules are source-checkout tooling and are deliberately not
+included in the installed wheel or exposed as console commands.
+
 The output contains entries for the inside of `package_filters`, not a complete
 configuration. The caller is responsible for assembling it, for example with
 concatenation or Jinja2. The generator:
@@ -113,7 +116,7 @@ useful when first applying a package-file policy to an existing mirror, after
 changing release/file filters, or when local state cannot be trusted:
 
 ```shell
-./shadowmire.py sync --sync-packages --reconcile-package-files
+shadowmire sync --sync-packages --reconcile-package-files
 ```
 
 `verify` performs a full consistency pass and refreshes explicit state for the

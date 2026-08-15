@@ -1,4 +1,4 @@
--r requirements.txt
+-e .
 -r requirements-utils.txt
 ruff~=0.16.3
 ty~=0.0.72

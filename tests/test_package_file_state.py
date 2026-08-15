@@ -2,14 +2,16 @@ import json
 import sqlite3
 from unittest.mock import Mock
 
-from shadowmire import (
+from shadowmire.constants import (
     PACKAGE_FILES_METADATA_ONLY,
     PACKAGE_FILES_PENDING,
-    PACKAGE_FILTER,
-    LocalVersionKV,
-    PackageInclusionChecker,
-    SyncBase,
 )
+from shadowmire.database import LocalVersionKV
+from shadowmire.filters import (
+    PACKAGE_FILTER,
+    PackageInclusionChecker,
+)
+from shadowmire.sync.base import SyncBase
 
 
 class StateSync(SyncBase):
@@ -86,7 +88,7 @@ def test_null_file_serial_is_effectively_the_metadata_serial(tmp_path, monkeypat
     local_db.set("popular", 1)
     syncer = StateSync(tmp_path, local_db, {"popular": 1}, sync_packages=True)
     get_existing_hrefs = Mock(side_effect=AssertionError("unexpected simple IO"))
-    monkeypatch.setattr("shadowmire.get_existing_hrefs", get_existing_hrefs)
+    monkeypatch.setattr("shadowmire.sync.base.get_existing_hrefs", get_existing_hrefs)
 
     plan = syncer.determine_sync_plan(
         local_db.dump(skip_invalid=False),
@@ -104,7 +106,7 @@ def test_null_metadata_only_state_does_not_trigger_upgrade_io(tmp_path, monkeypa
     local_db.set("other", 1)
     syncer = StateSync(tmp_path, local_db, {"other": 1}, sync_packages=True)
     get_existing_hrefs = Mock(side_effect=AssertionError("unexpected simple IO"))
-    monkeypatch.setattr("shadowmire.get_existing_hrefs", get_existing_hrefs)
+    monkeypatch.setattr("shadowmire.sync.base.get_existing_hrefs", get_existing_hrefs)
 
     plan = syncer.determine_sync_plan(
         local_db.dump(skip_invalid=False),

@@ -5,16 +5,15 @@ import click
 import pytest
 from click.testing import CliRunner
 
-from shadowmire import (
+from shadowmire.cli import cli
+from shadowmire.filters import (
     PACKAGE_FILTER,
     PackageFilterAction,
     PackageFilterRule,
     PackageInclusionChecker,
-    Plan,
-    SyncBase,
-    SyncPyPI,
-    cli,
 )
+from shadowmire.sync.base import Plan, SyncBase
+from shadowmire.sync.pypi import SyncPyPI
 
 
 def parse_rule(value: str | dict) -> PackageFilterRule:
@@ -177,7 +176,7 @@ class TestPackageFilterCLI:
             package_state_update={"verified": 1},
             remote_last_serial=42,
         )
-        monkeypatch.setattr("shadowmire.get_syncer", Mock(return_value=syncer))
+        monkeypatch.setattr("shadowmire.cli.get_syncer", Mock(return_value=syncer))
         repo = tmp_path / "repo"
 
         result = CliRunner().invoke(
@@ -366,7 +365,9 @@ class TestPackageFilePlan:
         get_existing_hrefs = Mock(
             side_effect=AssertionError("unexpected filesystem IO")
         )
-        monkeypatch.setattr("shadowmire.get_existing_hrefs", get_existing_hrefs)
+        monkeypatch.setattr(
+            "shadowmire.sync.base.get_existing_hrefs", get_existing_hrefs
+        )
         syncer = StubSync(tmp_path, {"popular": 1}, sync_packages=False)
 
         action = syncer.inspect_package_files("popular", package_files_included=True)

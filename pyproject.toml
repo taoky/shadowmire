@@ -1,3 +1,32 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "shadowmire"
+version = "2.0.0.dev0"
+description = "A lightweight PyPI mirror synchronizer"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0 OR AFL-3.0"
+license-files = ["LICENSE", "LICENSE.AFL"]
+authors = [{ name = "taoky" }]
+dependencies = [
+    "click==8.1.7",
+    "requests==2.32.4",
+    "tqdm==4.66.4",
+]
+
+[project.urls]
+Homepage = "https://github.com/taoky/shadowmire"
+Repository = "https://github.com/taoky/shadowmire"
+
+[project.scripts]
+shadowmire = "shadowmire.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/shadowmire"]
+
 [tool.pytest]
 testpaths = ["tests"]
 pythonpath = ["."]

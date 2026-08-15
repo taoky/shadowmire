@@ -14,7 +14,8 @@ from urllib.parse import unquote
 
 from tqdm import tqdm
 
-from shadowmire import LocalVersionKV, get_package_urls_size_from_index_json
+from shadowmire.database import LocalVersionKV
+from shadowmire.simple import get_package_urls_size_from_index_json
 
 IOWORKERS = int(os.environ.get("SHADOWMIRE_IOWORKERS", "2"))
 

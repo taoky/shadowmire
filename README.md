@@ -4,8 +4,49 @@ Shadowmire syncs PyPI (or plain HTTP(S) PyPI mirrors using Shadowmire) with a li
 
 Requires Python 3.11+.
 
+## Installation
+
+Create a virtual environment and install Shadowmire from a source checkout:
+
+```shell
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install .
+```
+
+The project metadata installs the runtime dependencies (`click`, `requests`,
+and `tqdm`) automatically. This also installs the `shadowmire` command; the
+equivalent module entry point is `python -m shadowmire`.
+
+Scripts under `utils/` have one additional dependency set. Install it when
+using those source-checkout tools:
+
+```shell
+python -m pip install -r requirements-utils.txt
+```
+
+## Development
+
+Install the project in editable mode together with the utility, test, lint,
+format, and type-checking dependencies:
+
+```shell
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements-dev.txt
+```
+
+Run the local checks with:
+
+```shell
+pytest
+ruff format --check src utils tests
+ruff check src utils tests
+ty check
+```
+
 > [!NOTE]
-> Current version in under development. Things might change!
+> Current version under development. Things might change!
 
 > [!NOTE]
 > For classic shadowmire version (without LLM commits), see [v1](https://github.com/taoky/shadowmire/tree/v1) branch.
@@ -48,7 +89,7 @@ Obviously, `list_packages_with_serial()`'s alternative is the `local.json`, whic
 If you just need to fetch all indexes (and then use a cache solution for packages):
 
 ```shell
-./shadowmire.py --repo /path/to/pypi sync
+shadowmire --repo /path/to/pypi sync
 ```
 
 If `--repo` argument is not set, it defaults to current working directory.
@@ -56,14 +97,14 @@ If `--repo` argument is not set, it defaults to current working directory.
 If you need to download all packages, add `--sync-packages`.
 
 ```shell
-./shadowmire.py sync --sync-packages
+shadowmire sync --sync-packages
 ```
 
 Use `--dry-run` to print the computed plan as JSON without applying it or
 finalizing the mirror:
 
 ```shell
-./shadowmire.py sync --sync-packages --dry-run
+shadowmire sync --sync-packages --dry-run
 ```
 
 > [!IMPORTANT]
@@ -72,7 +113,7 @@ finalizing the mirror:
 Sync supports both ordered package filters and the legacy `--include`/`--exclude` filters. For example, this syncs package files only for `django-ninja` while retaining metadata for other projects:
 
 ```shell
-./shadowmire.py sync \
+shadowmire sync \
     --sync-packages \
     --package-filter 'include:^django-ninja$' \
     --package-filter 'metadata-only:.*'
@@ -83,19 +124,19 @@ See [Package Filtering](docs/FILTER.md) for the complete new and legacy filter s
 Also it supports prerelease filtering like [this](https://bandersnatch.readthedocs.io/en/latest/filtering_configuration.html#prerelease-filtering):
 
 ```shell
-./shadowmire.py sync --sync-packages --prerelease-exclude '^duckdb$'
+shadowmire sync --sync-packages --prerelease-exclude '^duckdb$'
 ```
 
 Also wheel filename filtering is also supported, if you need to exclude wheels by platform, python version, etc.:
 
 ```shell
-./shadowmire.py sync --sync-packages --excluded-wheel-filename '-macosx-10.6-ppc.whl$'
+shadowmire sync --sync-packages --excluded-wheel-filename '-macosx-10.6-ppc.whl$'
 ```
 
 And `--shadowmire-upstream`, if you don't want to sync from PyPI directly.
 
 ```shell
-./shadowmire.py sync --shadowmire-upstream http://example.com/pypi/
+shadowmire sync --shadowmire-upstream http://example.com/pypi/
 ```
 
 > [!NOTE]
@@ -104,7 +145,7 @@ And `--shadowmire-upstream`, if you don't want to sync from PyPI directly.
 If you already have a PyPI repo, use `genlocal` first to generate a local db:
 
 ```shell
-./shadowmire.py genlocal
+shadowmire genlocal
 ```
 
 > [!IMPORTANT]
@@ -121,13 +162,13 @@ If you already have a PyPI repo, use `genlocal` first to generate a local db:
 4. delete unreferenced files (i.e. blobs) in `packages` folder
 
 ```shell
-./shadowmire.py verify --sync-packages
+shadowmire verify --sync-packages
 ```
 
 > [!TIP]
 > users are recommended to run `verify` regularly (e.g. every half a year) to make sure everything is in order, thanks to the unpredictable nature of PyPI.
 
-`verify` command accepts same arguments as sync, and accepts some new arguments. Please check `./shadowmire.py verify --help` for more information.
+`verify` command accepts same arguments as sync, and accepts some new arguments. Please check `shadowmire verify --help` for more information.
 
 > [!TIP]
 > You could set `SHADOWMIRE_IOWORKERS` environment variable to a number to set threads to do local I/O. Defaults to 2.
@@ -135,21 +176,21 @@ If you already have a PyPI repo, use `genlocal` first to generate a local db:
 > [!IMPORTANT]
 > For users switching from Bandersnatch to Shadowmire, you **MUST** run the following commands (with exclusion, of course) before regular syncing:
 >
-> 1. `./shadowmire.py genlocal`: generate database from local packages.
-> 1. `./shadowmire.py verify --sync-packages --remove-not-in-local --compare-size`: remove any local packages that were missing from upstream index (normally removed from PyPI), then download any missing metadata and packages. **This step is likely to take very long time, depending on your network and disk speed.**
+> 1. `shadowmire genlocal`: generate database from local packages.
+> 1. `shadowmire verify --sync-packages --remove-not-in-local --compare-size`: remove any local packages that were missing from upstream index (normally removed from PyPI), then download any missing metadata and packages. **This step is likely to take very long time, depending on your network and disk speed.**
 >     * Q: Why will there be packages that are in neither local db nor remote index?
 >     * A: They are packages without valid local metadata, and do not exist on PyPI anymore. These packages are typically downloaded a long time ago and removed from upstream, but they may still share some blobs with currently available packages. E.g. after name normalization of `Foo` to `foo`, they share all existings blobs, but `Foo` does not change any more.
 >     * Q: My HDD disk (array) is too, too, too slooooow, any method to speed up?
 >     * A: You could try remove `--compare-size` argument, at the cost of having a very small possible part of package file inconsistencies locally.
-> 1. `./shadowmire.py genlocal`: generate local database again.
-> 1. `./shadowmire.py sync --sync-packages`: synchronize new changes after verification.
+> 1. `shadowmire genlocal`: generate local database again.
+> 1. `shadowmire sync --sync-packages`: synchronize new changes after verification.
 
 ### Config file
 
 If you don't like appending a long argument list, you could use `--config` ([example](./config.example.toml)):
 
 ```shell
-./shadowmire.py --config config.toml sync
+shadowmire --config config.toml sync
 ```
 
 Also, if you need debugging, you could use `do-update` and `do-remove` command to operate on a single package.

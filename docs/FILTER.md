@@ -36,7 +36,7 @@ Shadowmire records applied package-file state in `local.db`. Once a project has 
 Reconciliation scans all metadata-visible projects. It removes existing distribution files and PEP 658 sidecars from metadata-only projects; when both `--sync-packages` and `--reconcile-package-files` are given, it also schedules included projects whose referenced files or sidecars are missing.
 
 ```shell
-./shadowmire.py sync --sync-packages --reconcile-package-files
+shadowmire sync --sync-packages --reconcile-package-files
 ```
 
 The flag only adds this scan for ordered `package_filters`; legacy `include`/`exclude` rules select whole projects and do not need package-file reconciliation. Using the flag when it is not required is safe, but adds an O(number of metadata-visible projects) filesystem scan.
@@ -58,7 +58,7 @@ package_filters = [
 For an existing mirror that previously included every project's package files, apply the equivalent CLI rules with reconciliation:
 
 ```shell
-./shadowmire.py sync \
+shadowmire sync \
     --sync-packages \
     --reconcile-package-files \
     --package-filter 'exclude:^problematic-project$' \
@@ -121,7 +121,7 @@ exclude = ["^django"]
 Legacy CLI example:
 
 ```shell
-./shadowmire.py sync \
+shadowmire sync \
     --include '^django-ninja$' \
     --exclude '^django'
 ```

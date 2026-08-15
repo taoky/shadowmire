@@ -10,7 +10,7 @@ Tests cover the following scenarios:
 
 import pytest
 
-from shadowmire import PackageInclusionChecker
+from shadowmire.filters import PackageInclusionChecker
 
 # =============================================================================
 # Test Data: Package Names
