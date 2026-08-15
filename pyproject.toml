@@ -13,17 +13,19 @@ license-files = ["LICENSE", "LICENSE.AFL"]
 authors = [{ name = "taoky" }]
 dependencies = [
     "click==8.1.7",
+    "packaging==25.0",
     "requests==2.32.4",
     "tqdm==4.66.4",
 ]
 
-[dependency-groups]
-utils = [
+[project.optional-dependencies]
+bigquery = [
     "google-cloud-bigquery==3.42.2",
-    "packaging==25.0",
 ]
+
+[dependency-groups]
 dev = [
-    { include-group = "utils" },
+    "google-cloud-bigquery==3.42.2",
     "pytest~=9.0.0",
     "ruff~=0.16.3",
     "ty~=0.0.72",
@@ -39,7 +41,7 @@ Repository = "https://github.com/taoky/shadowmire"
 shadowmire = "shadowmire.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/shadowmire"]
+packages = ["src/shadowmire", "src/shadowmire_utils"]
 
 # Keep uv.lock independent of developer-specific user configuration. Command-line
 # index options can still override this when intentionally using another index.

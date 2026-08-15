@@ -3,7 +3,7 @@ import tomllib
 
 import pytest
 
-from utils.generate_package_filters import (
+from shadowmire_utils.generate_package_filters import (
     build_patterns,
     generate_toml_entries,
     read_package_names,

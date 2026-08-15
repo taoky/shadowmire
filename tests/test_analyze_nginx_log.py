@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from utils.analyze_nginx_log import (
+from shadowmire_utils.analyze_nginx_log import (
     PackageTraffic,
     analyze_lines,
     decompressor_command,
@@ -37,11 +37,9 @@ def log_line(
     )
 
 
-def test_script_can_run_directly_outside_the_checkout(tmp_path):
-    script = Path(__file__).parents[1] / "utils" / "analyze_nginx_log.py"
-
+def test_installed_module_can_run_outside_the_checkout(tmp_path):
     result = subprocess.run(
-        [sys.executable, str(script), "--help"],
+        [sys.executable, "-m", "shadowmire_utils.analyze_nginx_log", "--help"],
         cwd=tmp_path,
         check=False,
         capture_output=True,
@@ -259,7 +257,7 @@ def test_open_log_streams_external_decompressors(tmp_path, suffix, executable):
 
 
 def test_missing_decompressor_is_reported(tmp_path, monkeypatch):
-    from utils import analyze_nginx_log
+    from shadowmire_utils import analyze_nginx_log
 
     log_path = tmp_path / "access.log.gz"
     log_path.touch()

@@ -1,9 +1,4 @@
-#!/usr/bin/env python3
-
-"""
-A reference implementation of
-selecting popular PyPI projects from nginx combined access logs.
-"""
+"""Select popular PyPI projects from nginx combined access logs."""
 
 from __future__ import annotations
 

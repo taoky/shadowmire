@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 """Select popular PyPI projects from the public BigQuery simple-request data."""
 
 from __future__ import annotations
@@ -11,12 +9,22 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import ROUND_CEILING, Decimal, InvalidOperation
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
-from google.api_core.exceptions import GoogleAPICallError
-from google.auth.exceptions import GoogleAuthError
-from google.cloud import bigquery
 from packaging.utils import InvalidName, canonicalize_name
+
+bigquery: Any
+try:
+    from google.api_core.exceptions import GoogleAPICallError
+    from google.auth.exceptions import GoogleAuthError
+    from google.cloud import bigquery
+except ImportError as error:
+    bigquery = None
+    BIGQUERY_IMPORT_ERROR: ImportError | None = error
+    GOOGLE_API_ERRORS: tuple[type[Exception], ...] = ()
+else:
+    BIGQUERY_IMPORT_ERROR = None
+    GOOGLE_API_ERRORS = (GoogleAPICallError, GoogleAuthError)
 
 PYPI_SIMPLE_REQUESTS_TABLE = "bigquery-public-data.pypi.simple_requests"
 BIGQUERY_LOCATION = "US"
@@ -55,6 +63,27 @@ class QueryWindow:
 
 class RequestRow(Protocol):
     def __getitem__(self, key: str, /) -> str | int | None: ...
+
+
+class QueryJob(Protocol):
+    total_bytes_processed: int | None
+    total_bytes_billed: int | None
+    cache_hit: bool
+
+    def result(self) -> Iterable[RequestRow]: ...
+
+
+class BigQueryClient(Protocol):
+    def query(self, query: str, *, job_config: Any, location: str) -> QueryJob: ...
+
+
+def require_bigquery() -> Any:
+    if BIGQUERY_IMPORT_ERROR is not None:
+        raise ValueError(
+            "BigQuery support requires optional dependencies; install "
+            "'shadowmire[bigquery]'"
+        ) from BIGQUERY_IMPORT_ERROR
+    return bigquery
 
 
 def parse_positive_int(value: str) -> int:
@@ -163,13 +192,14 @@ def query_config(
     *,
     dry_run: bool,
     maximum_bytes_billed: int | None = None,
-) -> bigquery.QueryJobConfig:
-    config = bigquery.QueryJobConfig(
+) -> Any:
+    api = require_bigquery()
+    config = api.QueryJobConfig(
         dry_run=dry_run,
         use_query_cache=not dry_run,
         query_parameters=[
-            bigquery.ScalarQueryParameter("start_time", "TIMESTAMP", window.start),
-            bigquery.ScalarQueryParameter("end_time", "TIMESTAMP", window.end),
+            api.ScalarQueryParameter("start_time", "TIMESTAMP", window.start),
+            api.ScalarQueryParameter("end_time", "TIMESTAMP", window.end),
         ],
     )
     if maximum_bytes_billed is not None:
@@ -177,7 +207,7 @@ def query_config(
     return config
 
 
-def estimate_query_bytes(client: bigquery.Client, window: QueryWindow) -> int:
+def estimate_query_bytes(client: BigQueryClient, window: QueryWindow) -> int:
     job = client.query(
         REQUESTS_QUERY,
         job_config=query_config(window, dry_run=True),
@@ -187,10 +217,10 @@ def estimate_query_bytes(client: bigquery.Client, window: QueryWindow) -> int:
 
 
 def query_requests(
-    client: bigquery.Client,
+    client: BigQueryClient,
     window: QueryWindow,
     maximum_bytes_billed: int,
-) -> tuple[Iterable[RequestRow], bigquery.QueryJob]:
+) -> tuple[Iterable[RequestRow], QueryJob]:
     job = client.query(
         REQUESTS_QUERY,
         job_config=query_config(
@@ -282,7 +312,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         coverage = parse_coverage(args.coverage)
         end_date = args.end_date or datetime.now(UTC).date()
         window = build_query_window(args.days, end_date)
-        client = bigquery.Client(project=args.project, location=BIGQUERY_LOCATION)
+        api = require_bigquery()
+        client = api.Client(project=args.project, location=BIGQUERY_LOCATION)
 
         estimated_bytes = estimate_query_bytes(client, window)
         print(
@@ -333,7 +364,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"{invalid_rows} invalid aggregate rows.",
             file=sys.stderr,
         )
-    except (GoogleAPICallError, GoogleAuthError, OSError, ValueError) as error:
+    except GOOGLE_API_ERRORS + (OSError, ValueError) as error:
         parser.error(str(error))
     return 0
 

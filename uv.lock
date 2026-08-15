@@ -704,45 +704,44 @@ version = "2.0.0.dev0"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
+    { name = "packaging" },
     { name = "requests" },
     { name = "tqdm" },
+]
+
+[package.optional-dependencies]
+bigquery = [
+    { name = "google-cloud-bigquery" },
 ]
 
 [package.dev-dependencies]
 dev = [
     { name = "google-cloud-bigquery" },
-    { name = "packaging" },
     { name = "pytest" },
     { name = "ruff" },
     { name = "ty" },
     { name = "types-requests" },
     { name = "types-tqdm" },
 ]
-utils = [
-    { name = "google-cloud-bigquery" },
-    { name = "packaging" },
-]
 
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = "==8.1.7" },
+    { name = "google-cloud-bigquery", marker = "extra == 'bigquery'", specifier = "==3.42.2" },
+    { name = "packaging", specifier = "==25.0" },
     { name = "requests", specifier = "==2.32.4" },
     { name = "tqdm", specifier = "==4.66.4" },
 ]
+provides-extras = ["bigquery"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "google-cloud-bigquery", specifier = "==3.42.2" },
-    { name = "packaging", specifier = "==25.0" },
     { name = "pytest", specifier = "~=9.0.0" },
     { name = "ruff", specifier = "~=0.16.3" },
     { name = "ty", specifier = "~=0.0.72" },
     { name = "types-requests", specifier = "~=2.32.0" },
     { name = "types-tqdm", specifier = "~=4.66.0" },
-]
-utils = [
-    { name = "google-cloud-bigquery", specifier = "==3.42.2" },
-    { name = "packaging", specifier = "==25.0" },
 ]
 
 [[package]]

@@ -57,20 +57,21 @@ operation; inspect `plan.json` before raising the limit.
 
 ## Generating filter entries
 
-Data acquisition belongs in `utils/`: BigQuery, nginx-log, database, and lock
-parsers should emit one project name per line. Convert that canonical list into
-a TOML fragment with:
+Data acquisition utilities live in the separate `shadowmire_utils` package:
+BigQuery, nginx-log, database, and lock parsers should emit one project name
+per line. Convert that canonical list into a TOML fragment with:
 
 ```shell
-python -m utils.generate_package_filters packages.txt package_filters.toml
+python -m shadowmire_utils.generate_package_filters packages.txt package_filters.toml
 ```
 
-The `utils` modules are source-checkout tooling and are deliberately not
-included in the installed wheel or exposed as console commands.
+These modules are included in the installed wheel but are deliberately not
+exposed as console commands, so they do not add executables to `bin`. Invoke
+them with `python -m shadowmire_utils.<module>`.
 
 ### nginx combined-log traffic
 
-`utils.analyze_nginx_log` expands a full-path glob for nginx combined access
+`shadowmire_utils.analyze_nginx_log` expands a full-path glob for nginx combined access
 logs, sorts matching regular files by modification time, and analyzes the
 newest `k` files (`7` by default). It counts `/simple/<project>/` accesses by
 normalized project name and selects the projects needed to reach a cumulative
@@ -78,14 +79,14 @@ traffic ratio. For example, to retain projects responsible for 99% of simple
 index requests from the seven most recent matching logs:
 
 ```shell
-uv run --locked --no-dev --group utils python -m utils.analyze_nginx_log \
+uv run --locked --no-dev python -m shadowmire_utils.analyze_nginx_log \
     --glob '/var/log/nginx/pypi.access.log*' \
     --recent 7 \
     --coverage 0.99 \
     --metric requests \
     --output popular-projects.txt
 
-uv run --locked --no-dev --group utils python -m utils.generate_package_filters \
+uv run --locked --no-dev python -m shadowmire_utils.generate_package_filters \
     popular-projects.txt package_filters.toml
 ```
 
@@ -116,9 +117,58 @@ is found, the command fails without writing `--output`; use `--allow-empty`
 only when an empty generated list is intentional. Run `--help` for the complete
 options.
 
+### ClickHouse access-log traffic
+
+`shadowmire_utils.analyze_clickhouse` applies the same project extraction, traffic
+metrics, coverage selection, and five-minute client-network deduplication as
+the nginx analyzer to the `mirrors.access_log` schema. It uses ClickHouse's HTTP
+interface and streams eligible rows in chronological order, so it does not
+load the complete result set into memory. `requests` counts accepted requests;
+`bytes` sums the schema's `size` field for accepted requests.
+
+For example, query the seven complete UTC days before 2026-08-16 and retain
+projects responsible for 99% of request traffic:
+
+```shell
+export CLICKHOUSE_URL='https://clickhouse.example:8443/'
+export CLICKHOUSE_USER='shadowmire-reader'
+export CLICKHOUSE_PASSWORD='...'
+
+uv run --locked --no-dev python -m shadowmire_utils.analyze_clickhouse \
+    --end-date 2026-08-16 \
+    --days 7 \
+    --repo pypi \
+    --coverage 0.99 \
+    --metric requests \
+    --output popular-projects.txt
+```
+
+The default endpoint is `http://localhost:8123`, the default user is
+`default`, and the default table is the database-qualified
+`mirrors.access_log`. The endpoint, user, and password can be set with the
+`CLICKHOUSE_URL`, `CLICKHOUSE_USER`, and `CLICKHOUSE_PASSWORD` environment
+variables or their corresponding command-line options. Prefer the password
+environment variable so the credential is not exposed in process listings.
+For a private CA use `--ca-cert`; `--insecure` is available only for explicitly
+trusted test environments.
+
+The SQL filters on `event_time`, `method = 'GET'`, HTTP 2xx/3xx status, and
+URLs containing a `/simple/<project>` path. It reads only `timestamp`,
+`clientip`, `url`, and `size`, plus `event_time` and `request_id` for stable
+chronological ordering. Optional `--source` and `--repo` values are sent as
+ClickHouse query parameters, not interpolated into SQL. The table option only
+accepts a database-qualified identifier.
+
+Rows are streamed to the client because the exact nginx deduplication rule is
+stateful: a suppressed request does not extend the five-minute window. This
+preserves the nginx analyzer's result rather than approximating it with fixed
+time buckets, at the cost of transferring every otherwise eligible simple-index
+request. As with the nginx analyzer, output is written only after the query has
+finished and a valid selection has been produced.
+
 ### PyPI BigQuery simple-index traffic
 
-`utils.analyze_bigquery` selects popular projects from PyPI's public
+`shadowmire_utils.analyze_bigquery` selects popular projects from PyPI's public
 `bigquery-public-data.pypi.simple_requests` table. It measures requests to the
 global PyPI service's `/simple/<project>/` pages, so its metric is analogous to
 the nginx analyzer's request metric. The public table does not contain client
@@ -144,7 +194,7 @@ Estimate a seven-day query without incurring query-processing charges or
 writing an output file:
 
 ```shell
-uv run --locked --no-dev --group utils python -m utils.analyze_bigquery \
+uv run --locked --no-dev --extra bigquery python -m shadowmire_utils.analyze_bigquery \
     --project my-billing-project \
     --days 7 \
     --coverage 0.99 \
@@ -154,7 +204,7 @@ uv run --locked --no-dev --group utils python -m utils.analyze_bigquery \
 Remove `--dry-run` and add `--output` to generate the project list:
 
 ```shell
-uv run --locked --no-dev --group utils python -m utils.analyze_bigquery \
+uv run --locked --no-dev --extra bigquery python -m shadowmire_utils.analyze_bigquery \
     --project my-billing-project \
     --days 7 \
     --coverage 0.99 \
@@ -210,7 +260,7 @@ For an air-gapped mirror, extract the package closure already recorded in a uv
 project lock file:
 
 ```shell
-uv run --locked --no-dev --group utils python -m utils.extract_uv_lock_packages \
+uv run --locked --no-dev python -m shadowmire_utils.extract_uv_lock_packages \
     /path/to/uv.lock \
     --output locked-projects.txt
 ```
@@ -219,8 +269,8 @@ PEP 751 `pylock.toml` and named `pylock.<name>.toml` files use a separate
 extractor:
 
 ```shell
-uv run --locked --no-dev --group utils \
-    python -m utils.extract_pep751_lock_packages \
+uv run --locked --no-dev \
+    python -m shadowmire_utils.extract_pep751_lock_packages \
     /path/to/pylock.toml \
     --output locked-projects.txt
 ```
@@ -242,7 +292,7 @@ Convert the extracted names to ordered filter entries in the same way as other
 generated lists:
 
 ```shell
-uv run --locked --no-dev --group utils python -m utils.generate_package_filters \
+uv run --locked --no-dev python -m shadowmire_utils.generate_package_filters \
     locked-projects.txt package_filters.toml
 ```
 

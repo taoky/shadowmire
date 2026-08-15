@@ -1,11 +1,10 @@
 import subprocess
 import sys
 import tomllib
-from pathlib import Path
 
 import pytest
 
-from utils.extract_pep751_lock_packages import extract_packages, main
+from shadowmire_utils.extract_pep751_lock_packages import extract_packages, main
 
 
 def test_extracts_index_distributions_and_skips_direct_sources():
@@ -126,11 +125,14 @@ def test_cli_writes_names_and_reports_direct_sources(tmp_path, capsys):
     assert "direct (archive)" in stderr
 
 
-def test_script_can_run_directly_outside_the_checkout(tmp_path):
-    script = Path(__file__).parents[1] / "utils" / "extract_pep751_lock_packages.py"
-
+def test_installed_module_can_run_outside_the_checkout(tmp_path):
     result = subprocess.run(
-        [sys.executable, str(script), "--help"],
+        [
+            sys.executable,
+            "-m",
+            "shadowmire_utils.extract_pep751_lock_packages",
+            "--help",
+        ],
         cwd=tmp_path,
         check=False,
         capture_output=True,

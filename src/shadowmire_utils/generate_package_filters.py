@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 """Generate TOML package_filters entries from a project-name list."""
 
 import argparse

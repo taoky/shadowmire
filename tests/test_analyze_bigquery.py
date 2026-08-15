@@ -1,3 +1,5 @@
+import subprocess
+import sys
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
@@ -5,8 +7,8 @@ import pytest
 from google.api_core.exceptions import GoogleAPICallError
 from google.auth.exceptions import GoogleAuthError
 
-from utils import analyze_bigquery
-from utils.analyze_bigquery import (
+from shadowmire_utils import analyze_bigquery
+from shadowmire_utils.analyze_bigquery import (
     BYTES_PER_GIB,
     BYTES_PER_TIB,
     REQUESTS_QUERY,
@@ -64,6 +66,47 @@ def install_fake_client(monkeypatch, client):
 
     monkeypatch.setattr(analyze_bigquery.bigquery, "Client", factory)
     return constructed
+
+
+def run_without_google_dependencies(*args):
+    script = """
+import importlib.abc
+import runpy
+import sys
+
+class BlockGoogleImports(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path, target=None):
+        if fullname == "google" or fullname.startswith("google."):
+            raise ImportError("blocked Google dependency")
+        return None
+
+sys.meta_path.insert(0, BlockGoogleImports())
+runpy.run_module("shadowmire_utils.analyze_bigquery", run_name="__main__")
+"""
+    return subprocess.run(
+        [sys.executable, "-c", script, *args],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_cli_help_works_without_bigquery_dependencies():
+    result = run_without_google_dependencies("--help")
+
+    assert result.returncode == 0
+    assert "--project PROJECT" in result.stdout
+    assert result.stderr == ""
+
+
+def test_cli_reports_how_to_install_missing_bigquery_dependencies():
+    result = run_without_google_dependencies(
+        "--project", "billing-project", "--dry-run"
+    )
+
+    assert result.returncode == 2
+    assert "install 'shadowmire[bigquery]'" in result.stderr
+    assert "Traceback" not in result.stderr
 
 
 def test_query_only_reads_partition_and_project_columns():

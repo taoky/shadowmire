@@ -1,7 +1,6 @@
-#!/usr/bin/env python3
 # This script is used to create EMPTY package files USED FOR DEBUG ONLY!
 # It requires a full simple/ and db (genlocal-ed)
-# Call like: python -m utils.create_package_stubs /path/to/pypi/
+# Call like: python -m shadowmire_utils.create_package_stubs /path/to/pypi/
 
 import os
 import sys

@@ -27,11 +27,13 @@ uv run --locked --no-dev shadowmire --help
 uv run --locked --no-dev python -m shadowmire --help
 ```
 
-Scripts under `utils/` have an additional dependency group. Include it when using those source-checkout tools:
+Installable utilities live in the separate `shadowmire_utils` package and are run as Python modules, so they do not add commands to `bin`:
 
 ```shell
-uv sync --locked --no-dev --group utils
+uv run --locked --no-dev python -m shadowmire_utils.analyze_nginx_log --help
 ```
+
+The BigQuery analyzer has a larger optional dependency. Include it with `uv sync --locked --no-dev --extra bigquery` when needed.
 
 ### Development installation
 
@@ -45,8 +47,8 @@ Run the local checks with:
 
 ```shell
 uv run --locked pytest
-uv run --locked ruff format --check src utils tests
-uv run --locked ruff check src utils tests
+uv run --locked ruff format --check src tests
+uv run --locked ruff check src tests
 uv run --locked ty check
 ```
 

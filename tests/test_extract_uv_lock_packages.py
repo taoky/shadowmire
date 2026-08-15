@@ -5,7 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from utils.extract_uv_lock_packages import extract_packages, main, read_uv_lock
+from shadowmire_utils.extract_uv_lock_packages import (
+    extract_packages,
+    main,
+    read_uv_lock,
+)
 
 
 def test_extracts_normalized_registry_packages_and_skips_other_sources():
@@ -105,11 +109,14 @@ def test_cli_writes_sorted_names_and_reports_skipped_sources(tmp_path, capsys):
     assert "local (virtual)" in stderr
 
 
-def test_script_can_run_directly_outside_the_checkout(tmp_path):
-    script = Path(__file__).parents[1] / "utils" / "extract_uv_lock_packages.py"
-
+def test_installed_module_can_run_outside_the_checkout(tmp_path):
     result = subprocess.run(
-        [sys.executable, str(script), "--help"],
+        [
+            sys.executable,
+            "-m",
+            "shadowmire_utils.extract_uv_lock_packages",
+            "--help",
+        ],
         cwd=tmp_path,
         check=False,
         capture_output=True,
