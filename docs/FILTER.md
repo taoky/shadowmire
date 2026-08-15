@@ -1,67 +1,96 @@
 # Package Filtering
 
-Shadowmire supports scoped, ordered package filters and the legacy `include` and `exclude` options. Both forms use Python regular expressions with `re.search()` against normalized package names. Use anchors such as `^` and `$` when an exact match is required.
+Shadowmire supports ordered package filters and the legacy `include` and `exclude` options. Both forms use Python regular expressions with `re.search()` against normalized package names. Use anchors such as `^` and `$` when an exact match is required.
 
 The two forms cannot be used together. Shadowmire exits with an error if `package_filters`/`--package-filter` is combined with a legacy `include` or `exclude` rule.
 
 ## Ordered package filters
 
-Each `package_filters` rule has an action, pattern, and optional target:
+Each `package_filters` rule has an action and pattern:
 
-- `metadata` controls whether the project exists in the root simple indexes, `simple/<project>/`, `json/`, `local.db`, and `local.json`.
-- `package` controls distribution files and their PEP 658 metadata sidecars.
-- `both` applies to both targets and is the default when `target` is omitted.
+- `include` includes both project metadata and package files.
+- `metadata-only` includes project metadata but not distribution files or their PEP 658 metadata sidecars.
+- `exclude` excludes both project metadata and package files.
 
-Rules are evaluated independently for each target, from top to bottom. Rules for another target are skipped. The first applicable matching rule decides whether that target is included or excluded, and a target that matches no rule is included. Excluding project metadata also prevents its package files from being synchronized, regardless of package-target rules.
+Rules are evaluated from top to bottom. The first matching rule selects the project's state, and a project that matches no rule is included. Project metadata consists of the root simple indexes, `simple/<project>/`, `json/`, `local.db`, and `local.json`.
 
-Package-excluded projects retain their project metadata and simple pages. File links in those pages still point to the mirror's local `packages/` paths; a Web or CDN layer may provide fallback behavior for files that are not mirrored. When a project becomes package-excluded, Shadowmire removes existing distribution and sidecar files during the next sync, including when using `--no-sync-packages`.
+Metadata-only projects retain their project metadata and simple pages. File links in those pages still point to the mirror's local `packages/` paths; a Web or CDN layer may provide fallback behavior for files that are not mirrored.
+
+Normal sync is incremental and does not scan package files for projects whose upstream serial is unchanged. When an updated project is metadata-only, Shadowmire removes its existing distribution and sidecar files even with `--no-sync-packages`; when it is included, `--sync-packages` downloads its files normally.
+
+### When reconciliation is required
+
+Shadowmire does not persist the previous package filter or scan every project during a normal sync. Therefore, use `--reconcile-package-files` on the first sync after a filter change if that change may switch any existing, metadata-visible project between `include` and `metadata-only`. Without reconciliation, affected projects are updated only when their upstream serial changes.
+
+| Change | Reconciliation required? | Reason |
+| --- | --- | --- |
+| `include` → `metadata-only` | Yes | The project remains in metadata, so an unchanged serial would not trigger removal of its existing files. |
+| `metadata-only` → `include` | Yes, with `--sync-packages` | The project remains in metadata, so an unchanged serial would not trigger downloading its missing files. |
+| Introducing or changing rules that may cause either transition | Yes | Shadowmire does not store the old rules and cannot identify the affected projects without scanning them. |
+| `include` or `metadata-only` → `exclude` | No | The project disappears from the filtered remote index, so normal sync removes the whole project even when its serial is unchanged. |
+| `exclude` → `include` or `metadata-only` | No | The project appears as new in the filtered remote index, so normal sync schedules a full project update. |
+| A fresh, empty mirror | No | Every selected project is already scheduled for its initial update. |
+| No filter change, and affected projects received new upstream serials | No | Their normal incremental updates apply the current package-file decision. |
+
+Reconciliation scans all metadata-visible projects. It removes existing distribution files and PEP 658 sidecars from metadata-only projects; when both `--sync-packages` and `--reconcile-package-files` are given, it also schedules included projects whose referenced files or sidecars are missing.
+
+```shell
+./shadowmire.py sync --sync-packages --reconcile-package-files
+```
+
+The flag only adds this scan for ordered `package_filters`; legacy `include`/`exclude` rules select whole projects and do not need package-file reconciliation. Using the flag when it is not required is safe, but adds an O(number of metadata-visible projects) filesystem scan.
+
+`verify` already performs a full consistency scan, so it applies the same package-filter decisions without this flag. Use `verify --sync-packages` when missing included files must be downloaded. If a mirror was initially created with `--no-sync-packages` and has no ordered `package_filters`, use `verify --sync-packages`; `sync --reconcile-package-files` has nothing to reconcile without ordered rules.
 
 For example, this always removes a problematic project, keeps metadata for all other projects, and mirrors package files only for `requests` and `flask`:
 
 ```toml
 [options]
 package_filters = [
-    { action = "exclude", pattern = "^problematic-project$", target = "both" },
-    { action = "include", pattern = "^requests$", target = "package" },
-    { action = "include", pattern = "^flask$", target = "package" },
-    { action = "exclude", pattern = ".*", target = "package" },
+    { action = "exclude", pattern = "^problematic-project$" },
+    { action = "include", pattern = "^requests$" },
+    { action = "include", pattern = "^flask$" },
+    { action = "metadata-only", pattern = ".*" },
 ]
 ```
 
-The equivalent CLI arguments are:
+For an existing mirror that previously included every project's package files, apply the equivalent CLI rules with reconciliation:
 
 ```shell
 ./shadowmire.py sync \
     --sync-packages \
-    --package-filter 'exclude@both:^problematic-project$' \
-    --package-filter 'include@package:^requests$' \
-    --package-filter 'include@package:^flask$' \
-    --package-filter 'exclude@package:.*'
+    --reconcile-package-files \
+    --package-filter 'exclude:^problematic-project$' \
+    --package-filter 'include:^requests$' \
+    --package-filter 'include:^flask$' \
+    --package-filter 'metadata-only:.*'
 ```
 
-The CLI value is `ACTION@TARGET:PATTERN`, where `ACTION` is `include` or `exclude`, and `TARGET` is `package`, `metadata`, or `both`. Omitting `@TARGET` defaults to `both`, for example `exclude:^broken-project$`. Only the first colon is treated as the separator, so the pattern may contain additional colons or `@` characters.
+The CLI value is `ACTION:PATTERN`, where `ACTION` is `include`, `metadata-only`, or `exclude`. Only the first colon is treated as the separator, so the pattern may contain additional colons or `@` characters.
 
-For an air-gapped mirror, target both metadata and package files and finish with a catch-all exclusion:
+For an air-gapped mirror, include lock-derived projects and finish with a catch-all exclusion:
 
 ```toml
 [options]
 package_filters = [
-    { action = "include", pattern = "^requests$", target = "both" },
-    { action = "include", pattern = "^flask$", target = "both" },
-    { action = "exclude", pattern = ".*", target = "both" },
+    { action = "include", pattern = "^requests$" },
+    { action = "include", pattern = "^flask$" },
+    { action = "exclude", pattern = ".*" },
 ]
 ```
+
+In this air-gapped configuration, changing the lock-derived list moves projects between `include` and `exclude`. Normal sync detects both directions, so `--reconcile-package-files` is not required.
 
 Rule order matters. In the following incorrect configuration, the second rule can never apply because the first rule matches every package:
 
 ```toml
 package_filters = [
-    { action = "exclude", pattern = ".*", target = "package" },
-    { action = "include", pattern = "^requests$", target = "package" },
+    { action = "metadata-only", pattern = ".*" },
+    { action = "include", pattern = "^requests$" },
 ]
 ```
 
-The package target is unrelated to `--filter-metadata`: the former selects projects whose files are stored locally, while `--filter-metadata` controls whether release/file filtering is reflected in each project's JSON metadata.
+The `metadata-only` action is unrelated to `--filter-metadata`: the former selects projects whose files are stored locally, while `--filter-metadata` controls whether release/file filtering is reflected in each project's JSON metadata.
 
 ## Legacy `include` and `exclude`
 

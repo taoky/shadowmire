@@ -54,15 +54,15 @@ If you need to download all packages, add `--sync-packages`.
 ```
 
 > [!IMPORTANT]
-> If you sync with indexes only first, `--sync-packages` would NOT update packages which have been the latest versions. Use `verify` command for this.
+> If you sync with indexes only first, adding `--sync-packages` later does not update projects whose upstream serials are unchanged. Use `verify --sync-packages`, or use `sync --sync-packages --reconcile-package-files` when ordered package filters are configured. See [when reconciliation is required](docs/FILTER.md#when-reconciliation-is-required).
 
-Sync supports both scoped, ordered package filters and the legacy `--include`/`--exclude` filters. For example, this syncs package files only for `django-ninja` while retaining metadata for other projects:
+Sync supports both ordered package filters and the legacy `--include`/`--exclude` filters. For example, this syncs package files only for `django-ninja` while retaining metadata for other projects:
 
 ```shell
 ./shadowmire.py sync \
     --sync-packages \
-    --package-filter 'include@package:^django-ninja$' \
-    --package-filter 'exclude@package:.*'
+    --package-filter 'include:^django-ninja$' \
+    --package-filter 'metadata-only:.*'
 ```
 
 See [Package Filtering](docs/FILTER.md) for the complete new and legacy filter semantics and TOML configuration.

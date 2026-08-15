@@ -10,6 +10,7 @@ from shadowmire import (
     PackageFilterRule,
     PackageInclusionChecker,
     SyncBase,
+    SyncPyPI,
     cli,
 )
 
@@ -79,29 +80,28 @@ class TestOrderedPackageFilters:
                 package_filters=(parse_rule("exclude:.*"),),
             )
 
-    def test_rules_are_evaluated_independently_by_target(self):
+    def test_metadata_only_keeps_metadata_without_package_files(self):
         checker = PackageInclusionChecker(
             include=(),
             exclude=(),
             package_filters=(
-                parse_rule("exclude@package:^large-package$"),
-                parse_rule("exclude@metadata:^broken-package$"),
+                parse_rule("metadata-only:^large-package$"),
+                parse_rule("exclude:^broken-package$"),
             ),
         )
 
         assert checker.is_included("large-package", "metadata") is True
         assert checker.is_included("large-package", "package") is False
         assert checker.is_included("broken-package", "metadata") is False
-        # A metadata exclusion always prevents syncing package files.
         assert checker.is_included("broken-package", "package") is False
 
-    def test_rules_for_other_targets_do_not_stop_matching(self):
+    def test_first_match_selects_one_state(self):
         checker = PackageInclusionChecker(
             include=(),
             exclude=(),
             package_filters=(
-                parse_rule("include@metadata:^demo$"),
-                parse_rule("exclude@both:.*"),
+                parse_rule("metadata-only:^demo$"),
+                parse_rule("exclude:.*"),
             ),
         )
 
@@ -115,48 +115,38 @@ class TestPackageFilterParsing:
 
         assert rule.action == "exclude"
         assert rule.pattern.pattern == "^demo::package$"
-        assert rule.target == "both"
 
-    def test_cli_target(self):
-        rule = parse_rule("exclude@package:^demo:@package$")
+    def test_metadata_only_action(self):
+        rule = parse_rule("metadata-only:^demo:@package$")
 
-        assert rule.action == "exclude"
+        assert rule.action == "metadata-only"
         assert rule.pattern.pattern == "^demo:@package$"
-        assert rule.target == "package"
 
     def test_toml_inline_table(self):
         rule = parse_rule({"action": "include", "pattern": "^requests$"})
 
         assert rule.action == "include"
         assert rule.pattern.pattern == "^requests$"
-        assert rule.target == "both"
 
-    @pytest.mark.parametrize("target", ["package", "metadata", "both"])
-    def test_toml_target(self, target):
-        rule = parse_rule(
-            {"action": "exclude", "pattern": "^requests$", "target": target}
-        )
+    def test_toml_metadata_only(self):
+        rule = parse_rule({"action": "metadata-only", "pattern": "^requests$"})
 
-        assert rule.target == target
+        assert rule.action == "metadata-only"
 
     @pytest.mark.parametrize(
         "value, message",
         [
-            ("exclude", "TARGET.*PATTERN"),
+            ("exclude", "ACTION:PATTERN"),
             ("allow:^requests$", "action must be"),
-            ("exclude@invalid:^requests$", "target must be"),
+            ("exclude@package:^requests$", "action must be"),
             ("exclude:", "non-empty string"),
             ("exclude:[", "invalid regular expression"),
-            ({"action": "exclude"}, "must contain 'action' and 'pattern'"),
+            ({"action": "exclude"}, "must contain exactly"),
             (
-                {"action": "exclude", "pattern": ".*", "extra": True},
-                "must contain 'action' and 'pattern'",
+                {"action": "exclude", "pattern": ".*", "target": "package"},
+                "must contain exactly",
             ),
             ({"action": 1, "pattern": ".*"}, "action must be"),
-            (
-                {"action": "exclude", "pattern": ".*", "target": 1},
-                "target must be",
-            ),
             ({"action": "exclude", "pattern": 1}, "non-empty string"),
         ],
     )
@@ -166,14 +156,23 @@ class TestPackageFilterParsing:
 
 
 class TestPackageFilterCLI:
+    def test_sync_exposes_reconcile_option(self, tmp_path):
+        result = CliRunner().invoke(
+            cli,
+            ["--repo", str(tmp_path / "repo"), "sync", "--help"],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "--reconcile-package-files" in result.output
+
     def test_structured_toml_rules_are_accepted(self, tmp_path):
         config = tmp_path / "config.toml"
         config.write_text(
             """
 [options]
 package_filters = [
-    { action = "include", pattern = "^django-ninja$", target = "package" },
-    { action = "exclude", pattern = "^django", target = "package" },
+    { action = "include", pattern = "^django-ninja$" },
+    { action = "metadata-only", pattern = "^django" },
 ]
 """
         )
@@ -285,8 +284,8 @@ class TestPackageFilePlan:
             include=(),
             exclude=(),
             package_filters=(
-                parse_rule("include@package:^popular$"),
-                parse_rule("exclude@package:.*"),
+                parse_rule("include:^popular$"),
+                parse_rule("metadata-only:.*"),
             ),
         )
 
@@ -300,7 +299,11 @@ class TestPackageFilePlan:
         other_path.with_name("other.whl.metadata").write_bytes(b"metadata")
         syncer = StubSync(tmp_path, {"popular": 1, "other": 1}, sync_packages=True)
 
-        plan = syncer.determine_sync_plan({"popular": 1, "other": 1}, self.checker())
+        plan = syncer.determine_sync_plan(
+            {"popular": 1, "other": 1},
+            self.checker(),
+            reconcile_package_files=True,
+        )
 
         assert plan.remove == []
         assert plan.update == ["popular"]
@@ -316,7 +319,11 @@ class TestPackageFilePlan:
         other_path.write_bytes(b"package")
         syncer = StubSync(tmp_path, {"popular": 1, "other": 1}, sync_packages=False)
 
-        plan = syncer.determine_sync_plan({"popular": 1, "other": 1}, self.checker())
+        plan = syncer.determine_sync_plan(
+            {"popular": 1, "other": 1},
+            self.checker(),
+            reconcile_package_files=True,
+        )
 
         assert plan.update == []
         assert plan.package_remove == ["other"]
@@ -340,7 +347,74 @@ class TestPackageFilePlan:
         assert json_path.exists()
         assert syncer.local_db_mock.mock_calls == []
 
-    def test_updates_receive_the_package_target_decision(self, tmp_path):
+    def test_normal_sync_does_not_scan_unchanged_package_files(self, tmp_path):
+        write_simple_project(tmp_path, "popular", "popular.whl")
+        other_path = write_simple_project(tmp_path, "other", "other.whl")
+        other_path.parent.mkdir(parents=True, exist_ok=True)
+        other_path.write_bytes(b"package")
+        syncer = StubSync(
+            tmp_path, {"popular": 1, "other": 1}, sync_packages=True
+        )
+
+        plan = syncer.determine_sync_plan(
+            {"popular": 1, "other": 1}, self.checker()
+        )
+
+        assert plan.update == []
+        assert plan.package_remove == []
+        assert other_path.exists()
+
+    def test_reconcile_handles_ordered_rules(self, tmp_path):
+        write_simple_project(tmp_path, "requests", "requests.whl")
+        syncer = StubSync(tmp_path, {"requests": 1}, sync_packages=True)
+        checker = PackageInclusionChecker(
+            include=(),
+            exclude=(),
+            package_filters=(
+                parse_rule("include:^requests$"),
+                parse_rule("exclude:.*"),
+            ),
+        )
+
+        plan = syncer.determine_sync_plan(
+            {"requests": 1}, checker, reconcile_package_files=True
+        )
+
+        assert plan.update == ["requests"]
+        assert plan.package_remove == []
+
+    def test_incremental_update_cleans_excluded_package_files(self, tmp_path):
+        package_path = write_simple_project(tmp_path, "other", "other.whl")
+        package_path.parent.mkdir(parents=True, exist_ok=True)
+        package_path.write_bytes(b"package")
+        metadata_path = package_path.with_name("other.whl.metadata")
+        metadata_path.write_bytes(b"metadata")
+        syncer = object.__new__(SyncPyPI)
+        SyncBase.__init__(syncer, tmp_path, Mock(), sync_packages=False)
+        syncer.get_package_metadata = Mock(
+            return_value={
+                "info": {"name": "other"},
+                "last_serial": 2,
+                "releases": {},
+            }
+        )
+        syncer.get_package_simple = Mock(return_value={"files": []})
+        file_checker = Mock()
+        file_checker.get_filtered_meta.side_effect = lambda _name, meta: meta
+
+        serial = syncer.do_update(
+            "other",
+            file_checker,
+            package_files_included=False,
+            use_db=False,
+        )
+
+        assert serial == 2
+        assert not package_path.exists()
+        assert not metadata_path.exists()
+        assert (tmp_path / "simple" / "other" / "index.v1_json").exists()
+
+    def test_updates_receive_the_package_file_decision(self, tmp_path):
         write_simple_project(tmp_path, "popular", "popular.whl")
         write_simple_project(tmp_path, "other", "other.whl")
         syncer = StubSync(tmp_path, {"popular": 2, "other": 2}, sync_packages=True)
@@ -352,12 +426,12 @@ class TestPackageFilePlan:
         assert success is True
         assert sorted(syncer.updates) == [("other", False), ("popular", True)]
 
-    def test_metadata_target_removes_the_whole_project(self, tmp_path):
+    def test_exclude_removes_the_whole_project(self, tmp_path):
         syncer = StubSync(tmp_path, {"broken": 1, "healthy": 1}, False)
         checker = PackageInclusionChecker(
             include=(),
             exclude=(),
-            package_filters=(parse_rule("exclude@metadata:^broken$"),),
+            package_filters=(parse_rule("exclude:^broken$"),),
         )
 
         plan = syncer.determine_sync_plan({"broken": 1, "healthy": 1}, checker)

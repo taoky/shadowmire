@@ -3,18 +3,22 @@
 
 # Note that by default sync_packages is false
 sync_packages = true
+# Enable after a filter change may switch existing projects between include and
+# metadata-only. See docs/FILTER.md for the exact cases and IO cost.
+# reconcile_package_files = true
 # shadowmire_upstream = "http://example.com/pypi/web/"
 # use_pypi_index = true
 
-# Ordered package selection rules. Rules may target project metadata, package
-# files, or both. The first applicable match wins; unmatched items are included.
+# Ordered package selection rules. An action includes metadata and files, keeps
+# metadata only, or excludes the project. The first match wins; unmatched items
+# are included.
 # Do not use package_filters together with the legacy include/exclude.
 package_filters = [
     # Always hide a problematic project and remove its package files:
-    # { action = "exclude", pattern = "^problematic-project$", target = "both" },
+    # { action = "exclude", pattern = "^problematic-project$" },
     # Only mirror package files for selected projects while keeping full metadata:
-    # { action = "include", pattern = "^requests$", target = "package" },
-    # { action = "exclude", pattern = ".*", target = "package" },
+    # { action = "include", pattern = "^requests$" },
+    # { action = "metadata-only", pattern = ".*" },
 ]
 
 # Legacy package selection rules (see docs/FILTER.md for their semantics):
