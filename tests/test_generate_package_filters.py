@@ -4,7 +4,6 @@ import tomllib
 import pytest
 
 from utils.generate_package_filters import (
-    atomic_write,
     build_patterns,
     generate_toml_entries,
     read_package_names,
@@ -38,12 +37,3 @@ def test_generated_entries_are_valid_toml():
     parsed = tomllib.loads(f"[options]\npackage_filters = [\n{entries}]\n")
 
     assert parsed["options"]["package_filters"][0]["action"] == "include"
-
-
-def test_atomic_write_replaces_output(tmp_path):
-    output = tmp_path / "filters.toml"
-    output.write_text("old")
-
-    atomic_write(output, "new")
-
-    assert output.read_text() == "new"

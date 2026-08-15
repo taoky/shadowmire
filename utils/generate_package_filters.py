@@ -3,9 +3,7 @@
 """Generate TOML package_filters entries from a project-name list."""
 
 import argparse
-import os
 import re
-import tempfile
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -66,22 +64,6 @@ def generate_toml_entries(action: str, patterns: Iterable[str]) -> str:
     )
 
 
-def atomic_write(path: Path, contents: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    mode = path.stat().st_mode & 0o777 if path.exists() else 0o644
-    fd, temporary_name = tempfile.mkstemp(
-        prefix=path.name + ".", suffix=".tmp", dir=path.parent, text=True
-    )
-    try:
-        os.fchmod(fd, mode)
-        with os.fdopen(fd, "w") as output:
-            output.write(contents)
-        Path(temporary_name).replace(path)
-    except BaseException:
-        Path(temporary_name).unlink(missing_ok=True)
-        raise
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Generate package_filters TOML entries from project names."
@@ -97,7 +79,9 @@ def main() -> None:
     with args.input_file.open() as input_file:
         package_names = read_package_names(input_file)
     patterns = build_patterns(package_names, args.max_pattern_length)
-    atomic_write(args.output_file, generate_toml_entries(args.action, patterns))
+    args.output_file.write_text(
+        generate_toml_entries(args.action, patterns), encoding="utf-8"
+    )
 
 
 if __name__ == "__main__":

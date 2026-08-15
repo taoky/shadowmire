@@ -68,6 +68,54 @@ python -m utils.generate_package_filters packages.txt package_filters.toml
 The `utils` modules are source-checkout tooling and are deliberately not
 included in the installed wheel or exposed as console commands.
 
+### nginx combined-log traffic
+
+`utils.analyze_nginx_log` expands a full-path glob for nginx combined access
+logs, sorts matching regular files by modification time, and analyzes the
+newest `k` files (`7` by default). It counts `/simple/<project>/` accesses by
+normalized project name and selects the projects needed to reach a cumulative
+traffic ratio. For example, to retain projects responsible for 99% of simple
+index requests from the seven most recent matching logs:
+
+```shell
+uv run --locked --no-dev --group utils python -m utils.analyze_nginx_log \
+    --glob '/var/log/nginx/pypi.access.log*' \
+    --recent 7 \
+    --coverage 0.99 \
+    --metric requests \
+    --output popular-projects.txt
+
+uv run --locked --no-dev --group utils python -m utils.generate_package_filters \
+    popular-projects.txt package_filters.toml
+```
+
+`--glob` is required and accepts absolute or relative paths. Quote it so the
+Python tool, rather than the shell, performs the expansion before selecting the
+newest files. Plain files are opened directly. Compressed files are streamed
+by invoking system binaries based on their suffix: `gzip -dc` for `.gz`,
+`xz -dc` for `.xz`, and `zstd -dc` for `.zst` or `.zstd`. Install the
+corresponding binary for every compression format present among the selected
+files. A missing or failing decompressor aborts the run before the output file
+is opened for writing.
+
+Only successful GET responses (HTTP 2xx and 3xx) are counted. `requests` means
+HTTP requests, not unique users or installations; `bytes` is the nginx
+`$body_bytes_sent` value for simple index responses. Package-file URLs are not
+processed.
+
+To reduce vote stuffing, accesses to the same normalized project from the same
+IPv4 `/24` or IPv6 `/48` network are counted only once within five minutes.
+IPv4-mapped IPv6 addresses use the IPv4 `/24` rule. The window is shared across
+all selected log files, which are processed oldest first, and a suppressed
+duplicate does not extend the window. Different projects from the same network
+are counted independently.
+
+The output is sorted and contains one project name per line. A malformed line
+is skipped and reported unless `--strict` is used. If no attributable traffic
+is found, the command fails without writing `--output`; use `--allow-empty`
+only when an empty generated list is intentional. Run `--help` for the complete
+options.
+
 The output contains entries for the inside of `package_filters`, not a complete
 configuration. The caller is responsible for assembling it, for example with
 concatenation or Jinja2. The generator:
@@ -76,9 +124,7 @@ concatenation or Jinja2. The generator:
 - ignores blank lines and whole-line comments;
 - sorts and deduplicates names;
 - groups names into bounded exact-match regexes instead of producing one rule
-  per project; and
-- atomically replaces its output, so a failed refresh preserves the previous
-  fragment.
+  per project.
 
 Do not mix generated ordered rules with the legacy `include` or `exclude`
 options. Always retain the final catch-all rule: unmatched ordered rules default
