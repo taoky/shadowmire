@@ -6,6 +6,8 @@ Requires Python 3.11+.
 
 ## Installation
 
+### Build with uv
+
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then create the project environment from the committed lock file:
 
 ```shell
@@ -25,7 +27,7 @@ Scripts under `utils/` have an additional dependency group. Include it when usin
 uv sync --locked --no-dev --group utils
 ```
 
-## Development
+### Development installation
 
 The default `dev` group includes the utility, test, lint, format, and type-checking dependencies:
 
@@ -48,6 +50,36 @@ If a mirror was written into the lock file, regenerate it explicitly against PyP
 
 ```shell
 uv lock --refresh --default-index https://pypi.org/simple
+```
+
+### Use Docker
+
+Build the runtime image from the locked dependencies:
+
+```shell
+docker build -t shadowmire .
+```
+
+Mount a host directory at `/mirror` to persist the mirror. Running with the
+host user's UID and GID keeps generated files owned by that user:
+
+```shell
+mkdir -p mirror
+docker run --rm \
+    --user "$(id -u):$(id -g)" \
+    --volume "$PWD/mirror:/mirror" \
+    shadowmire sync --sync-packages
+```
+
+Arguments after the image name are passed to the `shadowmire` command. For
+example, a configuration file can be mounted separately:
+
+```shell
+docker run --rm \
+    --user "$(id -u):$(id -g)" \
+    --volume "$PWD/mirror:/mirror" \
+    --volume "$PWD/config.toml:/config.toml:ro" \
+    shadowmire --config /config.toml sync
 ```
 
 > [!NOTE]
