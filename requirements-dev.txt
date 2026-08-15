@@ -1,5 +1,5 @@
 -r requirements.txt
--r requirements-genlist.txt
+-r requirements-utils.txt
 ruff~=0.15.6
 ty~=0.0.17
 types-requests~=2.32.0
