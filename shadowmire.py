@@ -1,37 +1,38 @@
 #!/usr/bin/env python
 
-import sys
-from types import FrameType
-from typing import IO, Any, Callable, Generator, Literal, NoReturn, Optional, overload
-import xmlrpc.client
-from dataclasses import dataclass
-import re
-import json
-from urllib.parse import urljoin, urlparse, urlunparse, unquote
-from pathlib import Path
-from html.parser import HTMLParser
-import logging
+import functools
 import html
+import json
+import logging
 import os
+import re
+import signal
+import socket
+import sqlite3
+import sys
+import tomllib
+import xmlrpc.client
+from collections.abc import Callable, Generator
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
+from copy import deepcopy
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from html.parser import HTMLParser
+from http.client import HTTPConnection
+from itertools import islice
 from os.path import (
     normpath,
 )  # fast path computation, instead of accessing real files like pathlib
-from contextlib import contextmanager
-import sqlite3
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
-from itertools import islice
-import signal
-import tomllib
-from copy import deepcopy
-import functools
-from http.client import HTTPConnection
-import socket
-from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from types import FrameType
+from typing import IO, Any, Literal, NoReturn, overload
+from urllib.parse import unquote, urljoin, urlparse, urlunparse
 
-import requests
 import click
-from tqdm import tqdm
+import requests
 from requests.adapters import HTTPAdapter, Retry
+from tqdm import tqdm
 
 LOG_FORMAT = "%(asctime)s %(levelname)s: %(message)s (%(filename)s:%(lineno)d)"
 logger = logging.getLogger("shadowmire")
@@ -69,7 +70,7 @@ class ExitProgramException(Exception):
     pass
 
 
-def exit_handler(signum: int, frame: Optional[FrameType]) -> None:
+def exit_handler(signum: int, frame: FrameType | None) -> None:
     raise ExitProgramException
 
 
@@ -100,7 +101,7 @@ class LocalVersionKV:
         )
         self.conn.commit()
 
-    def get(self, key: str) -> Optional[int]:
+    def get(self, key: str) -> int | None:
         cur = self.conn.cursor()
         res = cur.execute("SELECT value FROM local WHERE key = ?", (key,))
         row = res.fetchone()
@@ -166,13 +167,9 @@ def overwrite(
     file_path: Path, mode: str = "w", tmp_suffix: str = ".tmp"
 ) -> Generator[IO[Any], None, None]:
     tmp_path = file_path.parent / (file_path.name + tmp_suffix)
-    try:
-        with open(tmp_path, mode) as tmp_file:
-            yield tmp_file
-        tmp_path.rename(file_path)
-    except Exception:
-        # well, just keep the tmp_path in error case.
-        raise
+    with open(tmp_path, mode) as tmp_file:
+        yield tmp_file
+    tmp_path.rename(file_path)
 
 
 def fast_readall(file_path: Path) -> bytes:
@@ -219,9 +216,12 @@ def fast_iterdir(
     """
     assert filter_type in ["dir", "file"]
     for item in os.scandir(directory):
-        if filter_type == "dir" and item.is_dir():
-            yield item
-        elif filter_type == "file" and item.is_file():
+        if (
+            filter_type == "dir"
+            and item.is_dir()
+            or filter_type == "file"
+            and item.is_file()
+        ):
             yield item
 
 
@@ -300,7 +300,7 @@ def get_package_urls_size_from_index_json(json_path: Path) -> list[tuple[str, in
     return ret
 
 
-def get_existing_hrefs(package_simple_path: Path) -> Optional[list[tuple[str, bool]]]:
+def get_existing_hrefs(package_simple_path: Path) -> list[tuple[str, bool]] | None:
     """
     There exists packages that have no release files, so when it encounters errors it would return None,
     otherwise empty list or list with hrefs.
@@ -459,8 +459,8 @@ class PyPI:
                 )
 
             # data-yanked: yanked_reason
-            if "yanked" in release and release["yanked"]:
-                if "yanked_reason" in release and release["yanked_reason"]:
+            if release.get("yanked"):
+                if release.get("yanked_reason"):
                     file_tags += (
                         f' data-yanked="{html.escape(release["yanked_reason"])}"'
                     )
@@ -470,7 +470,7 @@ class PyPI:
             # data-metadata: digest_name (sha256)
             if core_metadata_map.get(release["filename"], False):
                 metadata = core_metadata_map[release["filename"]]
-                if cls.digest_name in metadata and metadata[cls.digest_name]:
+                if metadata.get(cls.digest_name):
                     file_tags += (
                         f' data-dist-info-metadata="{cls.digest_name}={html.escape(metadata[cls.digest_name])}"'
                         f' data-core-metadata="{cls.digest_name}={html.escape(metadata[cls.digest_name])}"'
@@ -560,8 +560,8 @@ class PackageFilterParamType(click.ParamType):
     def convert(
         self,
         value: Any,
-        param: Optional[click.Parameter],
-        ctx: Optional[click.Context],
+        param: click.Parameter | None,
+        ctx: click.Context | None,
     ) -> PackageFilterRule:
         if isinstance(value, PackageFilterRule):
             return value
@@ -608,13 +608,11 @@ class PackageFilterParamType(click.ParamType):
             self.fail("pattern must be a non-empty string", param, ctx)
 
         try:
-            compiled_pattern = re.compile(pattern)
+            compiled_pattern: re.Pattern[str] = re.compile(str(pattern))
         except re.error as e:
             self.fail(f"invalid regular expression {pattern!r}: {e}", param, ctx)
 
-        return PackageFilterRule(
-            action=action, pattern=compiled_pattern, target=target
-        )
+        return PackageFilterRule(action=action, pattern=compiled_pattern, target=target)
 
 
 PACKAGE_FILTER = PackageFilterParamType()
@@ -713,7 +711,7 @@ class FileInclusionChecker:
         excluded_wheel_filename: tuple[str],
         filter_meta: bool,
         skip_yanked: bool,
-        skip_old_packages_days: Optional[int],
+        skip_old_packages_days: int | None,
         least_releases_to_keep: int,
     ) -> None:
         self.prerelease_excludes = compile_regexes(prerelease_exclude)
@@ -765,7 +763,7 @@ class FileInclusionChecker:
                         del release_infos[release_idx]
         removed_old_release_infos: dict[str, list[tuple[datetime, dict]]] = {}
         if self.skip_old_packages_days is not None:
-            threshold_date = datetime.now(timezone.utc) - timedelta(
+            threshold_date = datetime.now(UTC) - timedelta(
                 days=self.skip_old_packages_days
             )
             releases = new_meta["releases"]
@@ -906,7 +904,6 @@ class SyncBase:
             json.dump(remote_pkgs, f)
 
         to_remove = []
-        to_update = []
         local_keys = set(local.keys())
         remote_keys = set(remote_pkgs.keys())
         for i in local_keys - remote_keys:
@@ -927,8 +924,7 @@ class SyncBase:
                 "Use SHADOWMIRE_MAX_DELETION env to adjust the threshold if you really want to proceed"
             )
             sys.exit(2)
-        for i in remote_keys - local_keys:
-            to_update.append(i)
+        to_update = list(remote_keys - local_keys)
         for i in local_keys:
             local_serial = local[i]
             remote_serial = remote_pkgs[i]
@@ -1189,9 +1185,7 @@ class SyncBase:
                 package_path.unlink()
                 logger.info("Removed package file %s", package_path)
             if has_metadata:
-                metadata_path = package_path.with_name(
-                    package_path.name + ".metadata"
-                )
+                metadata_path = package_path.with_name(package_path.name + ".metadata")
                 if metadata_path.exists():
                     metadata_path.unlink()
                     logger.info("Removed package metadata file %s", metadata_path)
@@ -1230,7 +1224,7 @@ class SyncBase:
         file_inclusion_checker: FileInclusionChecker,
         package_files_included: bool,
         use_db: bool = True,
-    ) -> Optional[int]:
+    ) -> int | None:
         raise NotImplementedError
 
     def write_meta_to_simple(
@@ -1324,7 +1318,7 @@ class SyncBase:
 
 def download(
     session: requests.Session, url: str, dest: Path
-) -> tuple[bool, Optional[requests.Response]]:
+) -> tuple[bool, requests.Response | None]:
     try:
         resp = session.get(url, allow_redirects=True)
     except requests.RequestException:
@@ -1348,8 +1342,8 @@ class SyncPyPI(SyncBase):
     ) -> None:
         self.pypi = PyPI()
         self.session = create_requests_session()
-        self.last_serial: Optional[int] = None
-        self.remote_packages: Optional[dict[str, int]] = None
+        self.last_serial: int | None = None
+        self.remote_packages: dict[str, int] | None = None
         super().__init__(basedir, local_db, sync_packages)
 
     def fetch_remote_versions(self) -> tuple[int, dict[str, int]]:
@@ -1373,7 +1367,7 @@ class SyncPyPI(SyncBase):
         file_inclusion_checker: FileInclusionChecker,
         package_files_included: bool,
         use_db: bool = True,
-    ) -> Optional[int]:
+    ) -> int | None:
         logger.info("updating %s", package_name)
         package_simple_path = self.simple_dir / package_name
         exists = package_simple_path.exists()
@@ -1471,7 +1465,7 @@ class SyncPyPI(SyncBase):
                     m_url = url + ".metadata"
                     m_dest = dest.with_name(dest.name + ".metadata")
                     logger.info("downloading metadata %s -> %s", m_url, m_dest)
-                    m_success, m_resp = download(self.session, m_url, m_dest)
+                    m_success, _m_resp = download(self.session, m_url, m_dest)
                     if not m_success:
                         logger.warning(
                             "ignoring %s metadata as it fails downloading", package_name
@@ -1501,7 +1495,7 @@ class SyncPlainHTTP(SyncBase):
     ) -> None:
         self.upstream = upstream
         self.session = create_requests_session()
-        self.pypi: Optional[PyPI]
+        self.pypi: PyPI | None
         if use_pypi_index:
             self.pypi = PyPI()
         else:
@@ -1570,7 +1564,7 @@ class SyncPlainHTTP(SyncBase):
         file_inclusion_checker: FileInclusionChecker,
         package_files_included: bool,
         use_db: bool = True,
-    ) -> Optional[int]:
+    ) -> int | None:
         logger.info("updating %s", package_name)
         package_simple_path = self.simple_dir / package_name
         package_simple_path.mkdir(exist_ok=True)
@@ -1680,7 +1674,7 @@ class SyncPlainHTTP(SyncBase):
         return last_serial
 
 
-def get_local_serial(package_meta_direntry: os.DirEntry[str]) -> Optional[int]:
+def get_local_serial(package_meta_direntry: os.DirEntry[str]) -> int | None:
     """
     Accepts /json/<package_name> as package_meta_path
     """
@@ -1800,9 +1794,7 @@ def sync_shared_args(func: Callable[..., Any]) -> Callable[..., Any]:
     return decorated
 
 
-def read_config(
-    ctx: click.Context, param: click.Option, filename: Optional[str]
-) -> None:
+def read_config(ctx: click.Context, param: click.Option, filename: str | None) -> None:
     # Set default repo as cwd
     ctx.default_map = {}
     ctx.default_map["repo"] = "."
@@ -1864,7 +1856,7 @@ def get_syncer(
     basedir: Path,
     local_db: LocalVersionKV,
     sync_packages: bool,
-    shadowmire_upstream: Optional[str],
+    shadowmire_upstream: str | None,
     use_pypi_index: bool,
 ) -> SyncBase:
     syncer: SyncBase
@@ -1889,7 +1881,7 @@ def get_syncer(
 def sync(
     ctx: click.Context,
     sync_packages: bool,
-    shadowmire_upstream: Optional[str],
+    shadowmire_upstream: str | None,
     package_inclusion_checker: PackageInclusionChecker,
     file_inclusion_checker: FileInclusionChecker,
     use_pypi_index: bool,
@@ -1973,7 +1965,7 @@ def genlocal(ctx: click.Context) -> None:
 def verify(
     ctx: click.Context,
     sync_packages: bool,
-    shadowmire_upstream: Optional[str],
+    shadowmire_upstream: str | None,
     package_inclusion_checker: PackageInclusionChecker,
     file_inclusion_checker: FileInclusionChecker,
     remove_not_in_local: bool,
@@ -2144,7 +2136,7 @@ def verify(
 def do_update(
     ctx: click.Context,
     sync_packages: bool,
-    shadowmire_upstream: Optional[str],
+    shadowmire_upstream: str | None,
     package_inclusion_checker: PackageInclusionChecker,
     file_inclusion_checker: FileInclusionChecker,
     use_pypi_index: bool,
@@ -2167,7 +2159,7 @@ def do_update(
 def do_remove(
     ctx: click.Context,
     sync_packages: bool,
-    shadowmire_upstream: Optional[str],
+    shadowmire_upstream: str | None,
     package_inclusion_checker: PackageInclusionChecker,
     file_inclusion_checker: FileInclusionChecker,
     use_pypi_index: bool,

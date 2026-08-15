@@ -298,13 +298,9 @@ class TestPackageFilePlan:
         other_path.parent.mkdir(parents=True, exist_ok=True)
         other_path.write_bytes(b"package")
         other_path.with_name("other.whl.metadata").write_bytes(b"metadata")
-        syncer = StubSync(
-            tmp_path, {"popular": 1, "other": 1}, sync_packages=True
-        )
+        syncer = StubSync(tmp_path, {"popular": 1, "other": 1}, sync_packages=True)
 
-        plan = syncer.determine_sync_plan(
-            {"popular": 1, "other": 1}, self.checker()
-        )
+        plan = syncer.determine_sync_plan({"popular": 1, "other": 1}, self.checker())
 
         assert plan.remove == []
         assert plan.update == ["popular"]
@@ -318,13 +314,9 @@ class TestPackageFilePlan:
         other_path = write_simple_project(tmp_path, "other", "other.whl")
         other_path.parent.mkdir(parents=True, exist_ok=True)
         other_path.write_bytes(b"package")
-        syncer = StubSync(
-            tmp_path, {"popular": 1, "other": 1}, sync_packages=False
-        )
+        syncer = StubSync(tmp_path, {"popular": 1, "other": 1}, sync_packages=False)
 
-        plan = syncer.determine_sync_plan(
-            {"popular": 1, "other": 1}, self.checker()
-        )
+        plan = syncer.determine_sync_plan({"popular": 1, "other": 1}, self.checker())
 
         assert plan.update == []
         assert plan.package_remove == ["other"]
@@ -351,17 +343,11 @@ class TestPackageFilePlan:
     def test_updates_receive_the_package_target_decision(self, tmp_path):
         write_simple_project(tmp_path, "popular", "popular.whl")
         write_simple_project(tmp_path, "other", "other.whl")
-        syncer = StubSync(
-            tmp_path, {"popular": 2, "other": 2}, sync_packages=True
-        )
+        syncer = StubSync(tmp_path, {"popular": 2, "other": 2}, sync_packages=True)
         checker = self.checker()
-        plan = syncer.determine_sync_plan(
-            {"popular": 1, "other": 1}, checker
-        )
+        plan = syncer.determine_sync_plan({"popular": 1, "other": 1}, checker)
 
-        success = syncer.do_sync_plan(
-            plan, checker, Mock()
-        )
+        success = syncer.do_sync_plan(plan, checker, Mock())
 
         assert success is True
         assert sorted(syncer.updates) == [("other", False), ("popular", True)]
@@ -374,9 +360,7 @@ class TestPackageFilePlan:
             package_filters=(parse_rule("exclude@metadata:^broken$"),),
         )
 
-        plan = syncer.determine_sync_plan(
-            {"broken": 1, "healthy": 1}, checker
-        )
+        plan = syncer.determine_sync_plan({"broken": 1, "healthy": 1}, checker)
 
         assert plan.remove == ["broken"]
         assert plan.update == []

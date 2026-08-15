@@ -12,7 +12,6 @@ import pytest
 
 from shadowmire import PackageInclusionChecker
 
-
 # =============================================================================
 # Test Data: Package Names
 # =============================================================================

@@ -7,13 +7,13 @@
 # python3 -m utils.generate_full_package_list curated_list.txt full_list.txt
 
 import argparse
-from pathlib import Path
+import queue
 import sys
 import tempfile
-import queue
+from pathlib import Path
 
-from tqdm import tqdm
 from packaging.requirements import Requirement
+from tqdm import tqdm
 
 import shadowmire
 
@@ -62,8 +62,7 @@ def main(args):
                 )
 
     with open(args.output_file, "w") as outfile:
-        for pkg in sorted(full_package_list):
-            outfile.write(f"{pkg}\n")
+        outfile.writelines(f"{pkg}\n" for pkg in sorted(full_package_list))
 
 
 if __name__ == "__main__":

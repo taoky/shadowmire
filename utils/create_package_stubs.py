@@ -3,16 +3,17 @@
 # It requires a full simple/ and db (genlocal-ed)
 # Call like: python -m utils.create_package_stubs /path/to/pypi/
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.parse import unquote
-from pathlib import Path
-import sys
 import os
+import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from os.path import (
     normpath,
 )  # fast path computation, instead of accessing real files like pathlib
+from pathlib import Path
+from urllib.parse import unquote
 
 from tqdm import tqdm
+
 from shadowmire import LocalVersionKV, get_package_urls_size_from_index_json
 
 IOWORKERS = int(os.environ.get("SHADOWMIRE_IOWORKERS", "2"))
