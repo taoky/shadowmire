@@ -4,6 +4,9 @@ Shadowmire syncs PyPI (or plain HTTP(S) PyPI mirrors using Shadowmire) with a li
 
 Requires Python 3.11+.
 
+> [!NOTE]
+> For classic shadowmire version (without LLM commits), see [v1](https://github.com/taoky/shadowmire/tree/v1) branch.
+
 ## Breaking Changes
 
 - [2025-11-30] ([a90e531](https://github.com/taoky/shadowmire/commit/a90e5315d1e7ddf5cf0c983b3f74b0cc971977c4)): Now by default the JSON API files written would have filtered out files not synced. It's now controlled by `--filter-metadata/--no-filter-metadata` argument (defaults to `--filter-metadata`).
