@@ -6,6 +6,7 @@ from unittest.mock import Mock
 import pytest
 import requests
 
+from shadowmire.constants import PACKAGE_FILES_PENDING, PACKAGE_NOT_FOUND_SERIAL
 from shadowmire.database import LocalVersionKV
 from shadowmire.sync import plain_http, pypi
 
@@ -53,6 +54,8 @@ def sync_case(request, tmp_path, monkeypatch):
     monkeypatch.setattr(syncer, "get_package_metadata", get_meta)
     monkeypatch.setattr(syncer, "get_package_simple", lambda name: simple)
     checker = Mock()
+    checker.has_rules.return_value = False
+    checker.includes_package_files.return_value = True
     checker.get_filtered_meta.side_effect = lambda name, meta: meta
     dest = tmp_path / PATH
     dest.parent.mkdir(parents=True)
@@ -84,6 +87,8 @@ def sync_case(request, tmp_path, monkeypatch):
         "db": db,
         "simple": simple,
         "meta": meta,
+        "syncer": syncer,
+        "checker": checker,
     }
 
 
@@ -172,8 +177,8 @@ def test_failed_sidecar_keeps_wheel_and_can_be_retried(sync_case):
     case = sync_case
     case["dest"].write_bytes(WHEEL)
     case["responses"][case["url"] + ".metadata"] = 500
-    # Sidecar failures remain nonfatal, matching the existing contract.
-    assert case["run"]() == 42
+    assert case["run"]() is None
+    assert case["db"].get("demo") is None
     assert case["calls"] == [case["url"] + ".metadata"]
     assert case["dest"].read_bytes() == WHEEL
     assert not case["sidecar"].exists()
@@ -182,6 +187,89 @@ def test_failed_sidecar_keeps_wheel_and_can_be_retried(sync_case):
     assert case["run"]() == 42
     assert case["calls"] == [case["url"] + ".metadata"]
     assert case["sidecar"].read_bytes() == METADATA
+
+
+@pytest.mark.parametrize("status", [500, 404, None])
+@pytest.mark.parametrize("previous", [None, (41, 41), (42, PACKAGE_FILES_PENDING)])
+def test_failed_sidecar_preserves_publication_and_retries_same_upstream_serial(
+    sync_case, monkeypatch, status, previous
+):
+    case = sync_case
+    syncer, db, checker = case["syncer"], case["db"], case["checker"]
+    published = [syncer.jsonmeta_dir / "demo"] + [
+        syncer.simple_dir / "demo" / name
+        for name in ("index.html", "index.v1_html", "index.v1_json")
+    ]
+    if previous is not None:
+        db.set_with_file_serial("demo", *previous)
+        old_meta = dict(case["meta"], last_serial=previous[0])
+        published[0].write_text(json.dumps(old_meta))
+        published[1].parent.mkdir(parents=True)
+        syncer.write_meta_to_simple(published[1].parent, old_meta, {})
+        case["dest"].write_bytes(WHEEL)
+    before = {path: path.read_bytes() if path.exists() else None for path in published}
+    old_serials = db.dump(skip_invalid=False)
+    old_file_serials = db.dump_file_serials()
+    monkeypatch.setattr(syncer, "fetch_remote_versions", lambda: (42, {"demo": 42}))
+
+    def plan():
+        return syncer.determine_sync_plan(
+            db.dump(skip_invalid=False),
+            checker,
+            local_file_serials=db.dump_file_serials(),
+        )
+
+    case["responses"][case["url"] + ".metadata"] = status
+    # If the mirror returns 404, its PyPI fallback must also fail for this case.
+    case["responses"][PYPI_URL + ".metadata"] = status
+    assert plan().update == ["demo"]
+    assert syncer.do_sync_plan(plan(), checker, checker) is False
+    assert db.dump(skip_invalid=False) == old_serials
+    assert db.dump_file_serials() == old_file_serials
+    assert {
+        path: path.read_bytes() if path.exists() else None for path in published
+    } == before
+    assert case["dest"].read_bytes() == WHEEL
+    assert not case["sidecar"].exists()
+    if case["url"] == MIRROR_URL and status == 404:
+        assert case["calls"][-2:] == [MIRROR_URL + ".metadata", PYPI_URL + ".metadata"]
+    wheel_mtime = case["dest"].stat().st_mtime_ns
+
+    case["responses"].clear()
+    case["calls"].clear()
+    assert plan().update == ["demo"]
+    assert syncer.do_sync_plan(plan(), checker, checker) is True
+    assert case["calls"] == [case["url"] + ".metadata"]
+    assert case["dest"].stat().st_mtime_ns == wheel_mtime
+    assert db.get("demo") == 42
+    assert db.dump_file_serials()["demo"] == 42
+    assert case["sidecar"].read_bytes() == METADATA
+    assert b"data-core-metadata" in published[1].read_bytes()
+    assert plan().update == []
+
+
+@pytest.mark.parametrize("failure", [None, RuntimeError("download failed"), "none"])
+def test_parallel_update_reports_failures_and_preserves_successful_results(
+    sync_case, monkeypatch, failure
+):
+    case = sync_case
+    results = {"good": 42, "removed": PACKAGE_NOT_FOUND_SERIAL}
+    if failure != "none":
+        results["failed"] = failure
+
+    def update(name, *args):
+        result = results[name]
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(case["syncer"], "do_update", update)
+    assert case["syncer"].parallel_update(
+        list(results), case["checker"], case["checker"]
+    ) is (failure == "none")
+    assert case["db"].get("good") == 42
+    assert case["db"].get("removed") == PACKAGE_NOT_FOUND_SERIAL
+    assert case["db"].get("failed") is None
 
 
 def test_plain_http_missing_sidecar_falls_back_without_fetching_wheel(sync_case):

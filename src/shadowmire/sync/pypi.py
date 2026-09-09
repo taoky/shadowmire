@@ -170,8 +170,10 @@ class SyncPyPI(SyncBase):
                     m_success, _m_resp = download(self.session, m_url, m_dest)
                     if not m_success:
                         logger.warning(
-                            "ignoring %s metadata as it fails downloading", package_name
+                            "skipping %s as its metadata fails downloading",
+                            package_name,
                         )
+                        return None
 
         last_serial: int = meta["last_serial"]
 

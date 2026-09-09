@@ -199,14 +199,16 @@ class SyncPlainHTTP(SyncBase):
                             )
                             if not m_success:
                                 logger.warning(
-                                    "ignoring %s metadata as it fails downloading (from pypi)",
+                                    "skipping %s as its metadata fails downloading (from pypi)",
                                     package_name,
                                 )
+                                return None
                         else:
                             logger.warning(
-                                "ignoring %s metadata as it fails downloading",
+                                "skipping %s as its metadata fails downloading",
                                 package_name,
                             )
+                            return None
 
         # OK, now it's safe to rename
         (self.jsonmeta_dir / (package_name + ".new")).rename(

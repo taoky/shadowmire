@@ -506,7 +506,9 @@ class SyncBase:
                 _, package_name = futures[future]
                 try:
                     serial = future.result()
-                    if serial:
+                    if serial is None:
+                        success = False
+                    elif serial:
                         self.record_local_update(
                             package_name,
                             serial,
