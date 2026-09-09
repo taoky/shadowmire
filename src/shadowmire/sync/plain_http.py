@@ -152,41 +152,43 @@ class SyncPlainHTTP(SyncBase):
                 path = file_url_to_local_path(i["url"])
                 url = urljoin(package_simple_url, href)
                 dest = Path(normpath(package_simple_path / path))
-                logger.info("downloading file %s -> %s", url, dest)
                 has_metadata = core_metadata_map.get(i["filename"], False)
-                if self.skip_this_package(i, dest, has_metadata):
-                    continue
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                success, resp = download(self.session, url, dest)
-                if not success:
-                    if resp and resp.status_code == 404:
-                        # handle special case: upstream filters out some files
-                        logger.warning(
-                            "cannot find %s at upstream, fallback to pypi", url
-                        )
-                        url = i["url"]  # original pypi URL
-                        success, resp = download(self.session, url, dest)
-                        if not success:
+                if not self.skip_this_package(i, dest):
+                    logger.info("downloading file %s -> %s", url, dest)
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    success, resp = download(self.session, url, dest)
+                    if not success:
+                        if resp is not None and resp.status_code == 404:
+                            # handle special case: upstream filters out some files
                             logger.warning(
-                                "skipping %s as it fails downloading (from pypi)",
-                                package_name,
+                                "cannot find %s at upstream, fallback to pypi", url
+                            )
+                            url = i["url"]  # original pypi URL
+                            success, resp = download(self.session, url, dest)
+                            if not success:
+                                logger.warning(
+                                    "skipping %s as it fails downloading (from pypi)",
+                                    package_name,
+                                )
+                                return None
+                        else:
+                            logger.warning(
+                                "skipping %s as it fails downloading", package_name
                             )
                             return None
-                    else:
-                        logger.warning(
-                            "skipping %s as it fails downloading", package_name
-                        )
-                        return None
 
                 # PEP 658: Download metadata file if available
-                if has_metadata:
+                if (
+                    has_metadata
+                    and not dest.with_name(dest.name + ".metadata").exists()
+                ):
                     # Try from upstream first, then fallback to PyPI if needed
                     m_url = url + ".metadata"
                     m_dest = dest.with_name(dest.name + ".metadata")
                     logger.info("downloading metadata %s -> %s", m_url, m_dest)
                     m_success, m_resp = download(self.session, m_url, m_dest)
                     if not m_success:
-                        if m_resp and m_resp.status_code == 404:
+                        if m_resp is not None and m_resp.status_code == 404:
                             pypi_m_url = i["url"] + ".metadata"
                             logger.warning(
                                 "cannot find metadata %s at upstream, fallback to pypi",

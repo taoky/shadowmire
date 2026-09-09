@@ -149,18 +149,21 @@ class SyncPyPI(SyncBase):
                     normpath(package_simple_path / file_url_to_local_path(i["url"]))
                 )
                 has_metadata = core_metadata_map.get(i["filename"], False)
-                logger.info("downloading file %s -> %s", url, dest)
-                if self.skip_this_package(i, dest, has_metadata):
-                    continue
-
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                success, _resp = download(self.session, url, dest)
-                if not success:
-                    logger.warning("skipping %s as it fails downloading", package_name)
-                    return None
+                if not self.skip_this_package(i, dest):
+                    logger.info("downloading file %s -> %s", url, dest)
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    success, _resp = download(self.session, url, dest)
+                    if not success:
+                        logger.warning(
+                            "skipping %s as it fails downloading", package_name
+                        )
+                        return None
 
                 # PEP 658: Download metadata file if available
-                if has_metadata:
+                if (
+                    has_metadata
+                    and not dest.with_name(dest.name + ".metadata").exists()
+                ):
                     m_url = url + ".metadata"
                     m_dest = dest.with_name(dest.name + ".metadata")
                     logger.info("downloading metadata %s -> %s", m_url, m_dest)
