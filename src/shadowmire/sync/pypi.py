@@ -87,7 +87,9 @@ class SyncPyPI(SyncBase):
                     recorded_serial,
                     self.last_serial,
                 )
-                return None
+                # Leave the project unrecorded so the next sync rechecks it.
+                # Unlike None, 0 does not make parallel_update report failure.
+                return 0
 
             logger.warning(
                 "%s missing from upstream (its serial %s, remote last serial %s), remove and ignore in the future.",

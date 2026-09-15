@@ -8,6 +8,7 @@ import requests
 
 from shadowmire.constants import PACKAGE_FILES_PENDING, PACKAGE_NOT_FOUND_SERIAL
 from shadowmire.database import LocalVersionKV
+from shadowmire.errors import PackageNotFoundError
 from shadowmire.sync import plain_http, pypi
 
 WHEEL = b"existing wheel contents"
@@ -270,6 +271,34 @@ def test_parallel_update_reports_failures_and_preserves_successful_results(
     assert case["db"].get("good") == 42
     assert case["db"].get("removed") == PACKAGE_NOT_FOUND_SERIAL
     assert case["db"].get("failed") is None
+
+
+def test_recently_deleted_package_is_skipped_without_failing_the_run(sync_case):
+    """A project still listed by XML-RPC can return 404 on metadata lookup.
+
+    The "try next time" skip keeps parallel_update successful and leaves
+    the project unrecorded so it can be checked on the next sync.
+    """
+    if not isinstance(sync_case["syncer"], pypi.SyncPyPI):
+        pytest.skip("serial-based deletion race is PyPI-specific")
+
+    case = sync_case
+    syncer = case["syncer"]
+    syncer.last_serial = 41000
+    syncer.remote_packages = {"demo": 40000}
+
+    def missing(name):
+        raise PackageNotFoundError(name)
+
+    syncer.get_package_metadata = missing
+
+    assert case["run"]() == 0
+    assert case["db"].get("demo") is None
+    assert not (syncer.simple_dir / "demo").exists()
+
+    checker = case["checker"]
+    assert syncer.parallel_update(["demo"], checker, checker) is True
+    assert case["db"].get("demo") is None
 
 
 def test_plain_http_missing_sidecar_falls_back_without_fetching_wheel(sync_case):
