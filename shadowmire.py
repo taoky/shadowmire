@@ -18,7 +18,8 @@ from os.path import (
 )  # fast path computation, instead of accessing real files like pathlib
 from contextlib import contextmanager
 import sqlite3
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, ThreadPoolExecutor
+from queue import Empty, SimpleQueue
 import signal
 import tomllib
 from copy import deepcopy
@@ -74,22 +75,69 @@ class PackageNotFoundError(Exception):
     pass
 
 
-class ExitProgramException(Exception):
-    pass
+class ExitProgramException(BaseException):
+    """Bypass ordinary per-package exception handlers."""
+
+
+stop_requested = False
 
 
 def exit_handler(signum: int, frame: Optional[FrameType]) -> None:
+    global stop_requested
+    stop_requested = True
     raise ExitProgramException
 
 
 signal.signal(signal.SIGTERM, exit_handler)
+signal.signal(signal.SIGINT, exit_handler)
 
 
-def exit_with_futures(futures: dict[Future[Any], Any]) -> NoReturn:
-    logger.info("Exiting...")
+def interruptible_as_completed(
+    futures: dict[Future[Any], Any],
+) -> Generator[Future[Any], None, None]:
+    # Signal exceptions can be swallowed by cleanup callbacks such as __del__.
+    # Poll the flag too, without repeatedly scanning all pending futures.
+    completed: SimpleQueue[Future[Any]] = SimpleQueue()
     for future in futures:
-        future.cancel()
-    sys.exit(1)
+        future.add_done_callback(completed.put)
+    remaining = len(futures)
+    while remaining:
+        if stop_requested:
+            raise ExitProgramException
+        try:
+            future = completed.get(timeout=0.2)
+        except Empty:
+            continue
+        yield future
+        remaining -= 1
+    if stop_requested:
+        raise ExitProgramException
+
+
+def exit_with_futures(
+    futures: dict[Future[Any], Any], local_db: Optional["LocalVersionKV"] = None
+) -> NoReturn:
+    # Do not interrupt state saving with another termination request.
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    try:
+        logger.info("Exiting...")
+        for future in futures:
+            future.cancel()
+        if local_db is not None:
+            # The signal may have interrupted a transaction (e.g. genlocal).
+            # Publish only committed state, which survives this process.
+            local_db.conn.rollback()
+            local_db.dump_json()
+    except Exception:
+        logger.exception("Failed to save state during termination")
+    finally:
+        # SystemExit would wait for running workers in the executor's __exit__
+        # and again at interpreter shutdown. Unfinished projects are retried.
+        try:
+            logging.shutdown()
+        finally:
+            os._exit(1)
 
 
 class LocalVersionKV:
@@ -902,13 +950,14 @@ class SyncBase:
 
         to_update = []
         with ThreadPoolExecutor(max_workers=IOWORKERS) as executor:
-            futures = {
-                executor.submit(is_consistent, package_name): package_name
-                for package_name in package_names
-            }
+            futures = {}
             try:
+                futures = {
+                    executor.submit(is_consistent, package_name): package_name
+                    for package_name in package_names
+                }
                 for future in tqdm(
-                    as_completed(futures),
+                    interruptible_as_completed(futures),
                     total=len(package_names),
                     desc="Checking consistency",
                 ):
@@ -923,7 +972,7 @@ class SyncBase:
                         )
                         raise
             except:
-                exit_with_futures(futures)
+                exit_with_futures(futures, self.local_db)
 
         logger.info("%s packages to update in check_and_update()", len(to_update))
         return self.parallel_update(to_update, file_inclusion_checker)
@@ -935,21 +984,22 @@ class SyncBase:
     ) -> bool:
         success = True
         with ThreadPoolExecutor(max_workers=WORKERS) as executor:
-            futures = {
-                executor.submit(
-                    self.do_update,
-                    package_name,
-                    file_inclusion_checker,
-                    False,
-                ): (
-                    idx,
-                    package_name,
-                )
-                for idx, package_name in enumerate(package_names)
-            }
+            futures = {}
             try:
+                futures = {
+                    executor.submit(
+                        self.do_update,
+                        package_name,
+                        file_inclusion_checker,
+                        False,
+                    ): (
+                        idx,
+                        package_name,
+                    )
+                    for idx, package_name in enumerate(package_names)
+                }
                 for future in tqdm(
-                    as_completed(futures), total=len(package_names), desc="Updating"
+                    interruptible_as_completed(futures), total=len(package_names), desc="Updating"
                 ):
                     idx, package_name = futures[future]
                     try:
@@ -967,7 +1017,7 @@ class SyncBase:
                         logger.info("dumping local db...")
                         self.local_db.dump_json()
             except (ExitProgramException, KeyboardInterrupt):
-                exit_with_futures(futures)
+                exit_with_futures(futures, self.local_db)
         return success
 
     def do_sync_plan(
@@ -1697,13 +1747,14 @@ def genlocal(ctx: click.Context) -> None:
     dir_items = [d for d in fast_iterdir(json_dir, "file")]
     logger.info("Detected %s packages in %s in total", len(dir_items), json_dir)
     with ThreadPoolExecutor(max_workers=IOWORKERS) as executor:
-        futures = {
-            executor.submit(get_local_serial, package_metapath): package_metapath
-            for package_metapath in dir_items
-        }
+        futures = {}
         try:
+            futures = {
+                executor.submit(get_local_serial, package_metapath): package_metapath
+                for package_metapath in dir_items
+            }
             for future in tqdm(
-                as_completed(futures),
+                interruptible_as_completed(futures),
                 total=len(dir_items),
                 desc="Reading packages from json/",
             ):
@@ -1719,7 +1770,7 @@ def genlocal(ctx: click.Context) -> None:
                         "%s generated an exception", package_name, exc_info=True
                     )
         except (ExitProgramException, KeyboardInterrupt):
-            exit_with_futures(futures)
+            exit_with_futures(futures, local_db)
     logger.info(
         "%d out of %d packages have valid serial number", len(local), len(dir_items)
     )
@@ -1808,14 +1859,15 @@ def verify(
                             res.append(file.path)
                 return res
 
-        futures = {
-            executor.submit(
-                packages_iterate, first_dir.name, idx % IOWORKERS
-            ): first_dir.name
-            for idx, first_dir in enumerate(fast_iterdir((basedir / "packages"), "dir"))
-        }
+        futures = {}
         try:
-            for future in as_completed(futures):
+            futures = {
+                executor.submit(
+                    packages_iterate, first_dir.name, idx % IOWORKERS
+                ): first_dir.name
+                for idx, first_dir in enumerate(fast_iterdir((basedir / "packages"), "dir"))
+            }
+            for future in interruptible_as_completed(futures):
                 sname = futures[future]
                 try:
                     for p in future.result():
@@ -1826,7 +1878,7 @@ def verify(
                     logger.warning("%s generated an exception", sname, exc_info=True)
                     success = False
         except (ExitProgramException, KeyboardInterrupt):
-            exit_with_futures(futures)
+            exit_with_futures(futures, local_db)
 
     logger.info(
         "====== Step 4. Make sure all local indexes are valid, and (if --sync-packages) have valid local package files ======"
@@ -1866,12 +1918,13 @@ def verify(
                     nps.append(metadata_np)
             return nps
 
-        futures = {
-            executor.submit(iterate_simple, sname): sname for sname in simple_dirs
-        }
+        futures = {}
         try:
+            futures = {
+                executor.submit(iterate_simple, sname): sname for sname in simple_dirs
+            }
             for future in tqdm(
-                as_completed(futures),
+                interruptible_as_completed(futures),
                 total=len(simple_dirs),
                 desc="Iterating simple/ directory",
             ):
@@ -1886,7 +1939,7 @@ def verify(
                     logger.warning("%s generated an exception", sname, exc_info=True)
                     success = False
         except (ExitProgramException, KeyboardInterrupt):
-            exit_with_futures(futures)
+            exit_with_futures(futures, local_db)
 
         # Part 2: handling packages
         for path in tqdm(packages_pathcache, desc="Iterating path cache"):
@@ -1963,5 +2016,17 @@ def clear_invalid_packages(ctx: click.Context) -> None:
     logger.info("Removed %s invalid status in local database", total)
 
 
+def main() -> None:
+    obj: dict[str, Any] = {}
+    try:
+        cli(obj=obj)
+    except (ExitProgramException, KeyboardInterrupt):
+        # Also cover sequential commands and phases outside worker loops.
+        exit_with_futures({}, obj.get("local_db"))
+    finally:
+        if stop_requested:
+            exit_with_futures({}, obj.get("local_db"))
+
+
 if __name__ == "__main__":
-    cli(obj={})
+    main()
