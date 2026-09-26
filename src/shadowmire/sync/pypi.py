@@ -9,6 +9,7 @@ from ..constants import (
     PACKAGE_FILES_METADATA_ONLY,
     PACKAGE_NOT_FOUND_SERIAL,
 )
+from ..cancellation import cancellable_iter
 from ..database import LocalVersionKV
 from ..errors import PackageNotFoundError
 from ..filesystem import overwrite
@@ -131,7 +132,7 @@ class SyncPyPI(SyncBase):
             # remove packages that no longer exist remotely
             remote_hrefs = [file_url_to_local_url(i["url"]) for i in release_files]
             should_remove = list(set(existing_hrefs) - set(remote_hrefs))
-            for href in should_remove:
+            for href in cancellable_iter(should_remove):
                 p = unquote(href)
                 logger.info("removing file %s (if exists)", p)
                 package_path = Path(normpath(package_simple_path / p))
@@ -142,7 +143,7 @@ class SyncPyPI(SyncBase):
                         package_path.name + ".metadata"
                     )
                     metadata_path.unlink(missing_ok=True)
-            for i in release_files:
+            for i in cancellable_iter(release_files):
                 url = i["url"]
                 dest = Path(
                     normpath(package_simple_path / file_url_to_local_path(i["url"]))

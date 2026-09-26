@@ -6,7 +6,6 @@ import signal
 import sys
 import tomllib
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from os.path import normpath
 from pathlib import Path
 from types import FrameType
@@ -16,10 +15,16 @@ from urllib.parse import unquote
 import click
 from tqdm import tqdm
 
-from . import __version__
+from . import __version__, cancellation
+from .cancellation import (
+    CancellableExecutor,
+    cancellable_completed,
+    cancellable_iter,
+    checkpoint,
+    run_in_worker,
+)
 from .constants import IOWORKERS, LOCAL_DB_NAME, LOCAL_JSON_NAME, WORKERS
 from .database import LocalVersionKV
-from .errors import ExitProgramException, exit_with_futures
 from .filesystem import fast_iterdir, fast_readall, overwrite
 from .filters import (
     PACKAGE_FILTER,
@@ -36,7 +41,31 @@ logger = logging.getLogger(__name__)
 
 
 def exit_handler(signum: int, frame: FrameType | None) -> None:
-    raise ExitProgramException
+    cancellation.request_stop()
+
+
+class CancellableGroup(click.Group):
+    def invoke(self, ctx: click.Context) -> Any:
+        try:
+            checkpoint()
+            result = super().invoke(ctx)
+            checkpoint()
+            return result
+        except (cancellation.StopRequested, KeyboardInterrupt):
+            cancellation.request_stop()
+            logger.info("Termination requested; saving local state")
+            try:
+                if ctx.obj and (local_db := ctx.obj.get("local_db")) is not None:
+                    local_db.dump_json()
+            except Exception:
+                logger.exception("Failed to save local state during termination")
+            finally:
+                if cancellation.has_abandoned_workers():
+                    # Workers never write SQLite. Their incomplete file operations
+                    # are retried on the next run using the last committed serials.
+                    logging.shutdown()
+                    os._exit(1)
+            raise click.exceptions.Exit(1)
 
 
 def get_local_serial(package_meta_direntry: os.DirEntry[str]) -> int | None:
@@ -184,7 +213,7 @@ def read_config(ctx: click.Context, param: click.Option, filename: str | None) -
     ctx.default_map["do-remove"] = options
 
 
-@click.group()
+@click.group(cls=CancellableGroup)
 @click.version_option(version=__version__)
 @click.option(
     "--config",
@@ -274,6 +303,7 @@ def sync(
         local_file_serials=local_file_serials,
     )
     plan_json = json.dumps(plan, default=vars, indent=2)
+    checkpoint()
     if dry_run:
         click.echo(plan_json)
         return
@@ -284,7 +314,9 @@ def sync(
     success = syncer.do_sync_plan(
         plan, package_inclusion_checker, file_inclusion_checker
     )
+    checkpoint()
     syncer.finalize(plan.remote_last_serial)
+    checkpoint()
 
     logger.info("Synchronization finished. Success: %s", success)
 
@@ -302,33 +334,27 @@ def genlocal(ctx: click.Context) -> None:
     logger.info("Iterating all items under %s", json_dir)
     dir_items = [d for d in fast_iterdir(json_dir, "file")]
     logger.info("Detected %s packages in %s in total", len(dir_items), json_dir)
-    with ThreadPoolExecutor(max_workers=IOWORKERS) as executor:
+    with CancellableExecutor(max_workers=IOWORKERS) as executor:
         futures = {
             executor.submit(get_local_serial, package_metapath): package_metapath
             for package_metapath in dir_items
         }
-        try:
-            for future in tqdm(
-                as_completed(futures),
-                total=len(dir_items),
-                desc="Reading packages from json/",
-            ):
-                package_name = futures[future].name
-                try:
-                    serial = future.result()
-                    if serial:
-                        local[package_name] = serial
-                except Exception as e:
-                    if isinstance(e, (KeyboardInterrupt)):
-                        raise
-                    logger.warning(
-                        "%s generated an exception", package_name, exc_info=True
-                    )
-        except (ExitProgramException, KeyboardInterrupt):
-            exit_with_futures(futures)
+        for future in tqdm(
+            cancellable_completed(futures),
+            total=len(dir_items),
+            desc="Reading packages from json/",
+        ):
+            package_name = futures[future].name
+            try:
+                serial = future.result()
+                if serial:
+                    local[package_name] = serial
+            except Exception:
+                logger.warning("%s generated an exception", package_name, exc_info=True)
     logger.info(
         "%d out of %d packages have valid serial number", len(local), len(dir_items)
     )
+    checkpoint()
     local_db.nuke(commit=False)
     local_db.batch_set(local)
     local_db.dump_json()
@@ -373,7 +399,7 @@ def verify(
         len(not_in_local),
         len(local_names),
     )
-    for package_name in not_in_local:
+    for package_name in cancellable_iter(not_in_local):
         logger.info("package %s not in local db", package_name)
         if remove_not_in_local:
             # Old bandersnatch would download packages without normalization,
@@ -390,7 +416,7 @@ def verify(
         "%s packages NOT in remote index -- this might contain packages that also do not exist locally",
         len(plan.remove),
     )
-    for package_name in plan.remove:
+    for package_name in cancellable_iter(plan.remove):
         # We only take the plan.remove part here
         logger.info("package %s not in remote index", package_name)
         syncer.do_remove(package_name, remove_packages=False)
@@ -400,7 +426,7 @@ def verify(
 
     logger.info("====== Step 3. Caching packages/ dirtree in memory for Step 4 & 5.")
     packages_pathcache: set[str] = set()
-    with ThreadPoolExecutor(max_workers=IOWORKERS) as executor:
+    with CancellableExecutor(max_workers=IOWORKERS) as executor:
 
         def packages_iterate(first_dirname: str, position: int) -> list[str]:
             with tqdm(
@@ -420,19 +446,14 @@ def verify(
             ): first_dir.name
             for idx, first_dir in enumerate(fast_iterdir((basedir / "packages"), "dir"))
         }
-        try:
-            for future in as_completed(futures):
-                sname = futures[future]
-                try:
-                    for p in future.result():
-                        packages_pathcache.add(p)
-                except Exception as e:
-                    if isinstance(e, (KeyboardInterrupt)):
-                        raise
-                    logger.warning("%s generated an exception", sname, exc_info=True)
-                    success = False
-        except (ExitProgramException, KeyboardInterrupt):
-            exit_with_futures(futures)
+        for future in cancellable_completed(futures):
+            sname = futures[future]
+            try:
+                for p in future.result():
+                    packages_pathcache.add(p)
+            except Exception:
+                logger.warning("%s generated an exception", sname, exc_info=True)
+                success = False
 
     logger.info(
         "====== Step 4. Make sure all local indexes are valid, and (if --sync-packages) have valid local package files ======"
@@ -445,13 +466,15 @@ def verify(
         packages_pathcache,
         compare_size,
     )
+    checkpoint()
     syncer.finalize(plan.remote_last_serial)
+    checkpoint()
 
     logger.info(
         "====== Step 5. Remove any unreferenced files in `packages` folder ======"
     )
     ref_set: set[str] = set()
-    with ThreadPoolExecutor(max_workers=IOWORKERS) as executor:
+    with CancellableExecutor(max_workers=IOWORKERS) as executor:
         # Part 1: iterate simple/
         def iterate_simple(sname: str) -> list[str]:
             sd = basedir / "simple" / sname
@@ -476,31 +499,29 @@ def verify(
         futures = {
             executor.submit(iterate_simple, sname): sname for sname in simple_dirs
         }
-        try:
-            for future in tqdm(
-                as_completed(futures),
-                total=len(simple_dirs),
-                desc="Iterating simple/ directory",
-            ):
-                sname = futures[future]
-                try:
-                    nps = future.result()
-                    for np in nps:
-                        ref_set.add(np)
-                except Exception as e:
-                    if isinstance(e, (KeyboardInterrupt)):
-                        raise
-                    logger.warning("%s generated an exception", sname, exc_info=True)
-                    success = False
-        except (ExitProgramException, KeyboardInterrupt):
-            exit_with_futures(futures)
+        for future in tqdm(
+            cancellable_completed(futures),
+            total=len(simple_dirs),
+            desc="Iterating simple/ directory",
+        ):
+            sname = futures[future]
+            try:
+                nps = future.result()
+                for np in nps:
+                    ref_set.add(np)
+            except Exception:
+                logger.warning("%s generated an exception", sname, exc_info=True)
+                success = False
 
         # Part 2: handling packages
-        for path in tqdm(packages_pathcache, desc="Iterating path cache"):
+        for path in tqdm(
+            cancellable_iter(packages_pathcache), desc="Iterating path cache"
+        ):
             if path not in ref_set:
                 logger.info("removing unreferenced file %s", path)
                 Path(path).unlink(missing_ok=True)
 
+    checkpoint()
     logger.info("Verification finished. Success: %s", success)
 
     if not success:
@@ -527,7 +548,16 @@ def do_update(
     syncer = get_syncer(
         basedir, local_db, sync_packages, shadowmire_upstream, use_pypi_index
     )
-    syncer.do_update(package_name, file_inclusion_checker, package_files_included=True)
+    serial = run_in_worker(
+        lambda: syncer.do_update(
+            package_name,
+            file_inclusion_checker,
+            package_files_included=True,
+            use_db=False,
+        )
+    )
+    if serial is not None:
+        syncer.record_local_update(package_name, serial, True)
 
 
 @cli.command(help="Manual remove given package for debugging purpose")
@@ -559,7 +589,7 @@ def list_packages_with_serial(ctx: click.Context) -> None:
     basedir = ctx.obj["basedir"]
     local_db = ctx.obj["local_db"]
     syncer = SyncPyPI(basedir, local_db)
-    syncer.fetch_remote_versions()
+    run_in_worker(syncer.fetch_remote_versions)
 
 
 @cli.command(help="Clear invalid package status in local database")
@@ -571,5 +601,12 @@ def clear_invalid_packages(ctx: click.Context) -> None:
 
 
 def main() -> None:
-    signal.signal(signal.SIGTERM, exit_handler)
-    cli()
+    cancellation.reset()
+    previous = {
+        sig: signal.signal(sig, exit_handler) for sig in (signal.SIGTERM, signal.SIGINT)
+    }
+    try:
+        cli()
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)

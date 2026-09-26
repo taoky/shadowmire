@@ -6,6 +6,7 @@ from urllib.parse import unquote, urljoin
 
 import requests
 
+from ..cancellation import cancellable_iter
 from ..constants import LOCAL_DB_SERIAL_NAME, LOCAL_JSON_NAME
 from ..database import LocalVersionKV
 from ..errors import PackageNotFoundError
@@ -135,7 +136,7 @@ class SyncPlainHTTP(SyncBase):
             release_files = get_release_files(meta)
             remote_hrefs = [file_url_to_local_url(i["url"]) for i in release_files]
             should_remove = list(set(existing_hrefs) - set(remote_hrefs))
-            for href in should_remove:
+            for href in cancellable_iter(should_remove):
                 p = unquote(href)
                 logger.info("removing file %s (if exists)", p)
                 package_path = Path(normpath(package_simple_path / p))
@@ -147,7 +148,7 @@ class SyncPlainHTTP(SyncBase):
                     )
                     metadata_path.unlink(missing_ok=True)
             package_simple_url = urljoin(self.upstream, f"simple/{package_name}/")
-            for i in release_files:
+            for i in cancellable_iter(release_files):
                 href = file_url_to_local_url(i["url"])
                 path = file_url_to_local_path(i["url"])
                 url = urljoin(package_simple_url, href)

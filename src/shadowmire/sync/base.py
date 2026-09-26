@@ -2,7 +2,6 @@ import json
 import logging
 import os
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from itertools import islice
 from os.path import normpath
@@ -21,8 +20,14 @@ from ..constants import (
     PACKAGE_NOT_FOUND_SERIAL,
     WORKERS,
 )
+from ..cancellation import (
+    CancellableExecutor,
+    cancellable_completed,
+    cancellable_iter,
+    checkpoint,
+    run_in_worker,
+)
 from ..database import LocalVersionKV
-from ..errors import ExitProgramException, exit_with_futures
 from ..filesystem import (
     MAX_FILENAME_BYTES,
     ignore_unrepresentable_path,
@@ -164,7 +169,7 @@ class SyncBase:
         package_remove = []
         package_update = []
         package_state_update = {}
-        with ThreadPoolExecutor(max_workers=IOWORKERS) as executor:
+        with CancellableExecutor(max_workers=IOWORKERS) as executor:
             package_iter = iter(package_serials)
             with tqdm(
                 total=len(package_serials), desc="Checking package filter"
@@ -180,7 +185,7 @@ class SyncBase:
                         ): package_name
                         for package_name in batch
                     }
-                    for future in as_completed(futures):
+                    for future in cancellable_completed(futures):
                         package_name = futures[future]
                         action = future.result()
                         if action == "remove":
@@ -213,7 +218,7 @@ class SyncBase:
         """
         local should NOT skip PACKAGE_NOT_FOUND_SERIAL entries
         """
-        remote_sn, remote_pkgs = self.fetch_remote_versions()
+        remote_sn, remote_pkgs = run_in_worker(self.fetch_remote_versions)
         remote_pkgs = self.filter_remote(remote_pkgs, package_inclusion_checker)
         with open(self.basedir / "remote_excluded.json", "w") as f:
             json.dump(remote_pkgs, f)
@@ -435,39 +440,32 @@ class SyncBase:
         to_update = []
         package_state_update: dict[str, int] = {}
         local_serials = self.local_db.dump()
-        with ThreadPoolExecutor(max_workers=IOWORKERS) as executor:
+        with CancellableExecutor(max_workers=IOWORKERS) as executor:
             futures = {
                 executor.submit(is_consistent, package_name): package_name
                 for package_name in package_names
             }
-            try:
-                for future in tqdm(
-                    as_completed(futures),
-                    total=len(package_names),
-                    desc="Checking consistency",
-                ):
-                    package_name = futures[future]
-                    try:
-                        consistent = future.result()
-                        if not consistent:
-                            to_update.append(package_name)
-                        elif not package_inclusion_checker.includes_package_files(
-                            package_name
-                        ):
-                            package_state_update[package_name] = (
-                                PACKAGE_FILES_METADATA_ONLY
-                            )
-                        elif self.sync_packages:
-                            package_state_update[package_name] = local_serials[
-                                package_name
-                            ]
-                    except Exception:
-                        logger.warning(
-                            "%s generated an exception", package_name, exc_info=True
-                        )
-                        raise
-            except:
-                exit_with_futures(futures)
+            for future in tqdm(
+                cancellable_completed(futures),
+                total=len(package_names),
+                desc="Checking consistency",
+            ):
+                package_name = futures[future]
+                try:
+                    consistent = future.result()
+                    if not consistent:
+                        to_update.append(package_name)
+                    elif not package_inclusion_checker.includes_package_files(
+                        package_name
+                    ):
+                        package_state_update[package_name] = PACKAGE_FILES_METADATA_ONLY
+                    elif self.sync_packages:
+                        package_state_update[package_name] = local_serials[package_name]
+                except Exception:
+                    logger.warning(
+                        "%s generated an exception", package_name, exc_info=True
+                    )
+                    raise
 
         logger.info("%s packages to update in check_and_update()", len(to_update))
         if package_state_update:
@@ -483,7 +481,7 @@ class SyncBase:
         file_inclusion_checker: FileInclusionChecker,
     ) -> bool:
         success = True
-        with ThreadPoolExecutor(max_workers=WORKERS) as executor:
+        with CancellableExecutor(max_workers=WORKERS) as executor:
             futures = {
                 executor.submit(
                     self.do_update,
@@ -497,33 +495,30 @@ class SyncBase:
                 )
                 for idx, package_name in enumerate(package_names)
             }
-            try:
-                for future in tqdm(
-                    as_completed(futures), total=len(package_names), desc="Updating"
-                ):
-                    idx, package_name = futures[future]
-                    try:
-                        serial = future.result()
-                        if serial:
-                            self.record_local_update(
-                                package_name,
-                                serial,
-                                package_inclusion_checker.includes_package_files(
-                                    package_name
-                                ),
-                            )
-                    except Exception as e:
-                        if isinstance(e, (KeyboardInterrupt)):
-                            raise
-                        logger.warning(
-                            "%s generated an exception", package_name, exc_info=True
+            for future in tqdm(
+                cancellable_completed(futures),
+                total=len(package_names),
+                desc="Updating",
+            ):
+                idx, package_name = futures[future]
+                try:
+                    serial = future.result()
+                    if serial:
+                        self.record_local_update(
+                            package_name,
+                            serial,
+                            package_inclusion_checker.includes_package_files(
+                                package_name
+                            ),
                         )
-                        success = False
-                    if idx % 100 == 0:
-                        logger.info("dumping local db...")
-                        self.local_db.dump_json()
-            except (ExitProgramException, KeyboardInterrupt):
-                exit_with_futures(futures)
+                except Exception:
+                    logger.warning(
+                        "%s generated an exception", package_name, exc_info=True
+                    )
+                    success = False
+                if idx % 100 == 0:
+                    logger.info("dumping local db...")
+                    self.local_db.dump_json()
         return success
 
     def record_local_update(
@@ -546,14 +541,14 @@ class SyncBase:
         to_remove = plan.remove
         to_update = plan.update
 
-        for package_name in to_remove:
+        for package_name in cancellable_iter(to_remove):
             self.do_remove(package_name)
 
         logger.info(
             "%s packages have files excluded by package filters",
             len(plan.package_remove),
         )
-        for package_name in plan.package_remove:
+        for package_name in cancellable_iter(plan.package_remove):
             self.remove_package_files(package_name)
             self.local_db.set_file_serial(package_name, PACKAGE_FILES_METADATA_ONLY)
 
@@ -577,7 +572,7 @@ class SyncBase:
         package_simple_dir: Path,
         package_files: list[tuple[str, bool]],
     ) -> None:
-        for href, has_metadata in package_files:
+        for href, has_metadata in cancellable_iter(package_files):
             relative_path = unquote(href)
             package_path = Path(normpath(package_simple_dir / relative_path))
             if package_path.exists():
@@ -592,6 +587,7 @@ class SyncBase:
     def do_remove(
         self, package_name: str, use_db: bool = True, remove_packages: bool = True
     ) -> None:
+        checkpoint()
         metajson_path = self.jsonmeta_dir / package_name
         package_simple_dir = self.simple_dir / package_name
         with ignore_unrepresentable_path():
@@ -607,7 +603,7 @@ class SyncBase:
                 paths_to_remove.append(path)
                 if has_metadata:
                     paths_to_remove.append(path.with_name(path.name + ".metadata"))
-            for p in paths_to_remove:
+            for p in cancellable_iter(paths_to_remove):
                 with ignore_unrepresentable_path():
                     if p.exists():
                         p.unlink()
@@ -651,6 +647,7 @@ class SyncBase:
             index_html_path.symlink_to("index.v1_html")
 
     def finalize(self, index_serial: int) -> None:
+        checkpoint()
         local_names = self.local_db.keys()
         # generate v1_html index
         v1_html_index_path = self.basedir / "simple" / "index.v1_html"
