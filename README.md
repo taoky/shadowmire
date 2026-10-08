@@ -190,6 +190,20 @@ shadowmire genlocal
 > [!IMPORTANT]
 > You shall have file `json/<package_name>` before `genlocal`.
 
+#### Retrying unavailable packages
+
+PyPI may list a project while its JSON API returns 404, either temporarily due to cache propagation or persistently because the project has no remaining releases or is quarantined. Shadowmire records some of these failures as serial `-1` and skips them in subsequent syncs, even if the project later becomes available.
+
+For projects not yet present locally, `SHADOWMIRE_IGNORE_THRESHOLD` (default: `100000`) allows retries while the absolute difference between the project's serial and PyPI's latest global serial is below the threshold. This is a serial difference, not a duration; increasing it does not reset existing `-1` entries.
+
+To allow the next sync to retry these projects, clear the recorded invalid statuses:
+
+```shell
+shadowmire --repo /path/to/pypi clear-invalid-packages
+```
+
+Consider scheduling this command weekly, without overlapping a sync (if possible). It only clears database records; the next regular sync performs the retries. This also resets other `-1` entries, such as projects rejected for overlong filenames, which will be checked again.
+
 #### Verification
 
 `verify` command could be used if you believe that something is wrong (inconsistent). It would:

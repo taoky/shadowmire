@@ -23,7 +23,7 @@ IOWORKERS = int(os.environ.get("SHADOWMIRE_IOWORKERS", "2"))
 # Avoid upstream issues causing too many packages to be removed from a plan.
 MAX_DELETION = int(os.environ.get("SHADOWMIRE_MAX_DELETION", "50000"))
 # Avoid permanently marking recently listed, temporarily unavailable packages.
-IGNORE_THRESHOLD = int(os.environ.get("SHADOWMIRE_IGNORE_THRESHOLD", "10000"))
+IGNORE_THRESHOLD = int(os.environ.get("SHADOWMIRE_IGNORE_THRESHOLD", "100000"))
 
 PRERELEASE_PATTERNS = (
     re.compile(r".+rc\d+$"),
