@@ -52,7 +52,7 @@ def provide_metadata(syncer, meta):
         syncer.get_package_metadata = Mock(return_value=meta)
     response = Mock(status_code=200)
     response.json.return_value = meta
-    response.content = json.dumps(meta).encode()
+    response.iter_content.return_value = [json.dumps(meta).encode()]
     syncer.session.get.return_value = response
 
 
@@ -179,7 +179,9 @@ def test_parallel_rejection_preserves_other_projects(syncer):
         return meta
 
     syncer.get_package_metadata = Mock(side_effect=get_meta)
-    syncer.session.get.return_value = Mock(status_code=200, content=b"wheel")
+    syncer.session.get.return_value = Mock(
+        status_code=200, iter_content=Mock(return_value=[b"wheel"])
+    )
     assert syncer.parallel_update(
         ["bad", "good"], PackageInclusionChecker((), ()), file_checker()
     )
