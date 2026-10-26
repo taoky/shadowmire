@@ -45,21 +45,35 @@ def create_requests_session() -> requests.Session:
     return s
 
 
+# resp.content reads the body in 10 KiB pieces, each one re-acquiring the GIL,
+# which caps throughput when many worker threads download at once.
+DOWNLOAD_CHUNK_SIZE = 1024 * 1024
+
+
 def download(
     session: requests.Session, url: str, dest: Path
 ) -> tuple[bool, requests.Response | None]:
     try:
-        resp = session.get(url, allow_redirects=True)
+        resp = session.get(url, allow_redirects=True, stream=True)
     except requests.RequestException:
-        logger.warning("download %s failed with exception", exc_info=True)
+        logger.warning("download %s failed with exception", url, exc_info=True)
         return False, None
-    if resp.status_code >= 400:
-        logger.warning(
-            "download %s failed with status %s, skipping this package",
-            url,
-            resp.status_code,
-        )
-        return False, resp
-    with overwrite(dest, "wb") as f:
-        f.write(resp.content)
-    return True, resp
+    try:
+        if resp.status_code >= 400:
+            logger.warning(
+                "download %s failed with status %s, skipping this package",
+                url,
+                resp.status_code,
+            )
+            return False, resp
+        try:
+            with overwrite(dest, "wb") as f:
+                for chunk in resp.iter_content(DOWNLOAD_CHUNK_SIZE):
+                    f.write(chunk)
+        except requests.RequestException:
+            logger.warning("download %s failed with exception", url, exc_info=True)
+            dest.with_name(dest.name + ".tmp").unlink(missing_ok=True)
+            return False, None
+        return True, resp
+    finally:
+        resp.close()

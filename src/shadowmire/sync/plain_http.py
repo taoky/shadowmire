@@ -10,7 +10,7 @@ from ..cancellation import cancellable_iter
 from ..constants import LOCAL_DB_SERIAL_NAME, LOCAL_JSON_NAME
 from ..database import LocalVersionKV
 from ..errors import PackageNotFoundError
-from ..filesystem import overwrite
+from ..filesystem import fast_readall, overwrite
 from ..filters import FileInclusionChecker
 from ..http import create_requests_session, download
 from ..pypi import PyPI
@@ -74,9 +74,8 @@ class SyncPlainHTTP(SyncBase):
 
     def get_package_metadata(self, package_name: str) -> dict:
         file_url = urljoin(self.upstream, f"json/{package_name}")
-        success, resp = download(
-            self.session, file_url, self.jsonmeta_dir / (package_name + ".new")
-        )
+        dest = self.jsonmeta_dir / (package_name + ".new")
+        success, resp = download(self.session, file_url, dest)
         if not success:
             logger.error(
                 "download %s JSON meta fails with code %s",
@@ -84,8 +83,8 @@ class SyncPlainHTTP(SyncBase):
                 resp.status_code if resp else None,
             )
             raise PackageNotFoundError
-        assert resp
-        return resp.json()
+        # download() streams the body to dest, so it cannot be read from resp
+        return json.loads(fast_readall(dest))
 
     def get_package_simple(self, package_name: str) -> dict:
         if not self.pypi:
