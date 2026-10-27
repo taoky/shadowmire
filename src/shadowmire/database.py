@@ -16,6 +16,12 @@ class LocalVersionKV:
 
     def __init__(self, dbpath: Path, jsonpath: Path) -> None:
         self.conn = sqlite3.connect(dbpath)
+        # Every update commits on the main thread. In WAL mode with
+        # synchronous=NORMAL a commit does not fsync (checkpoints do), so a
+        # busy disk no longer caps the update rate. A crash can only lose the
+        # last commits, and those projects are synced again next time.
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA synchronous=NORMAL")
         self.jsonpath = jsonpath
         cur = self.conn.cursor()
         cur.execute(
@@ -131,4 +137,7 @@ class LocalVersionKV:
     def dump_json(self, skip_invalid: bool = True) -> None:
         res = self.dump(skip_invalid)
         with overwrite(self.jsonpath) as f:
-            json.dump(res, f, indent=2)
+            # One json.dumps() call: only the one-shot compact path uses the C
+            # encoder, and a single write avoids re-taking the GIL per chunk
+            # while worker threads are busy. This runs on the main thread.
+            f.write(json.dumps(res))
