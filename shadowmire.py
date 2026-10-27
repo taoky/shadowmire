@@ -150,6 +150,10 @@ class LocalVersionKV:
 
     def __init__(self, dbpath: Path, jsonpath: Path) -> None:
         self.conn = sqlite3.connect(dbpath)
+        # WAL with NORMAL avoids syncing each commit. Power loss or an OS crash
+        # may roll back recent commits; those projects are retried next sync.
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA synchronous=NORMAL")
         self.jsonpath = jsonpath
         cur = self.conn.cursor()
         cur.execute(
@@ -215,7 +219,8 @@ class LocalVersionKV:
     def dump_json(self, skip_invalid: bool = True) -> None:
         res = self.dump(skip_invalid)
         with overwrite(self.jsonpath) as f:
-            json.dump(res, f, indent=2)
+            # https://github.com/python/cpython/issues/129711
+            f.write(json.dumps(res))
 
 
 @contextmanager
