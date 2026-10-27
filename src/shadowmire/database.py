@@ -1,6 +1,7 @@
-import json
 import sqlite3
 from pathlib import Path
+
+import msgspec
 
 from .constants import PACKAGE_NOT_FOUND_SERIAL
 from .filesystem import overwrite
@@ -136,8 +137,5 @@ class LocalVersionKV:
 
     def dump_json(self, skip_invalid: bool = True) -> None:
         res = self.dump(skip_invalid)
-        with overwrite(self.jsonpath) as f:
-            # One json.dumps() call: only the one-shot compact path uses the C
-            # encoder, and a single write avoids re-taking the GIL per chunk
-            # while worker threads are busy. This runs on the main thread.
-            f.write(json.dumps(res))
+        with overwrite(self.jsonpath, mode="wb") as f:
+            f.write(msgspec.json.encode(res))
