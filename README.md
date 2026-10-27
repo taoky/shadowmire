@@ -226,6 +226,12 @@ shadowmire verify --sync-packages
 > [!TIP]
 > You could set `SHADOWMIRE_IOWORKERS` environment variable to a number to set threads to do local I/O. Defaults to 2.
 
+> [!TIP]
+> During a sync, `local.json` is rewritten at most every `SHADOWMIRE_LOCAL_JSON_DUMP_INTERVAL` seconds (default 60) and once more at the end. Each dump serializes the whole local database on the main thread, so a shorter interval slows large syncs.
+
+> [!TIP]
+> Updating packages is CPU-bound Python in the worker threads, and the main thread records every result. With the GIL, more workers do not help much and the main thread can starve. A free-threaded build (e.g. `uv sync --python 3.14t`) lets the workers and the main thread run in parallel.
+
 > [!IMPORTANT]
 > For users switching from Bandersnatch to Shadowmire, you **MUST** run the following commands (with exclusion, of course) before regular syncing:
 >

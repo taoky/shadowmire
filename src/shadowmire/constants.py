@@ -20,6 +20,11 @@ PACKAGE_FILES_METADATA_ONLY = -1
 WORKERS = int(os.environ.get("SHADOWMIRE_WORKERS", "3"))
 # Use threads to parallelize verification local IO.
 IOWORKERS = int(os.environ.get("SHADOWMIRE_IOWORKERS", "2"))
+# Minimum seconds between local.json dumps while a sync is updating packages.
+# Each dump serializes the whole local database on the main thread.
+LOCAL_JSON_DUMP_INTERVAL = float(
+    os.environ.get("SHADOWMIRE_LOCAL_JSON_DUMP_INTERVAL", "60")
+)
 # Avoid upstream issues causing too many packages to be removed from a plan.
 MAX_DELETION = int(os.environ.get("SHADOWMIRE_MAX_DELETION", "50000"))
 # Avoid permanently marking recently listed, temporarily unavailable packages.

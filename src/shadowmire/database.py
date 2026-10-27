@@ -1,6 +1,7 @@
-import json
 import sqlite3
 from pathlib import Path
+
+import msgspec
 
 from .constants import PACKAGE_NOT_FOUND_SERIAL
 from .filesystem import overwrite
@@ -16,6 +17,12 @@ class LocalVersionKV:
 
     def __init__(self, dbpath: Path, jsonpath: Path) -> None:
         self.conn = sqlite3.connect(dbpath)
+        # Every update commits on the main thread. In WAL mode with
+        # synchronous=NORMAL a commit does not fsync (checkpoints do), so a
+        # busy disk no longer caps the update rate. A crash can only lose the
+        # last commits, and those projects are synced again next time.
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA synchronous=NORMAL")
         self.jsonpath = jsonpath
         cur = self.conn.cursor()
         cur.execute(
@@ -130,5 +137,5 @@ class LocalVersionKV:
 
     def dump_json(self, skip_invalid: bool = True) -> None:
         res = self.dump(skip_invalid)
-        with overwrite(self.jsonpath) as f:
-            json.dump(res, f, indent=2)
+        with overwrite(self.jsonpath, mode="wb") as f:
+            f.write(msgspec.json.encode(res))

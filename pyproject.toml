@@ -13,6 +13,7 @@ license-files = ["LICENSE", "LICENSE.AFL"]
 authors = [{ name = "taoky" }]
 dependencies = [
     "click==8.1.7",
+    "msgspec==0.22.0",
     "packaging==25.0",
     "requests==2.32.4",
     "tqdm==4.66.4",

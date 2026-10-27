@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import sys
+import time
 from dataclasses import dataclass
 from itertools import islice
 from os.path import normpath
@@ -14,6 +15,7 @@ from tqdm import tqdm
 from ..constants import (
     IOWORKERS,
     LOCAL_DB_SERIAL_NAME,
+    LOCAL_JSON_DUMP_INTERVAL,
     MAX_DELETION,
     PACKAGE_FILES_METADATA_ONLY,
     PACKAGE_FILES_PENDING,
@@ -481,6 +483,7 @@ class SyncBase:
         file_inclusion_checker: FileInclusionChecker,
     ) -> bool:
         success = True
+        last_dump = time.monotonic()
         with CancellableExecutor(max_workers=WORKERS) as executor:
             futures = {
                 executor.submit(
@@ -500,7 +503,7 @@ class SyncBase:
                 total=len(package_names),
                 desc="Updating",
             ):
-                idx, package_name = futures[future]
+                _, package_name = futures[future]
                 try:
                     serial = future.result()
                     if serial:
@@ -516,9 +519,10 @@ class SyncBase:
                         "%s generated an exception", package_name, exc_info=True
                     )
                     success = False
-                if idx % 100 == 0:
+                if time.monotonic() - last_dump >= LOCAL_JSON_DUMP_INTERVAL:
                     logger.info("dumping local db...")
                     self.local_db.dump_json()
+                    last_dump = time.monotonic()
         return success
 
     def record_local_update(
