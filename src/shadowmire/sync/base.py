@@ -506,7 +506,9 @@ class SyncBase:
                 _, package_name = futures[future]
                 try:
                     serial = future.result()
-                    if serial:
+                    if serial is None:
+                        success = False
+                    elif serial:
                         self.record_local_update(
                             package_name,
                             serial,
@@ -691,21 +693,13 @@ class SyncBase:
             f.write(str(index_serial))
         self.local_db.dump_json()
 
-    def skip_this_package(self, i: dict, dest: Path, has_metadata: bool) -> bool:
+    def skip_this_package(self, i: dict, dest: Path) -> bool:
         """
         A helper function for subclasses implementing do_update().
         As existence check is also done with stat(), this would not bring extra I/O overhead.
-        Returns if skip this package or not.
+        Return whether the distribution file can be kept; check its metadata separately.
         """
         try:
-            if has_metadata:
-                m_dest = dest.with_name(dest.name + ".metadata")
-                if not m_dest.exists():
-                    logger.warning(
-                        "metadata %s not exists locally, so the package would still be downloaded.",
-                        dest,
-                    )
-                    return False
             dest_size = dest.stat().st_size
             i_size = i.get("size", -1)
             if i_size == -1:
